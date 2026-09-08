@@ -894,15 +894,25 @@ def export_rerun(path, cfg, geom, times, eyes, R_wc, metrics):
            rr.Points3D(geom.cloud, colors=[(80, 140, 255)], radii=0.02),
            static=True)
 
-    segs, cols = [], []
-    for i in range(1, n):
-        segs.append(np.stack([eyes[i - 1], eyes[i]]))
-        if times[i] <= cfg.lead_s:
-            cols.append((128, 128, 128))
-        else:
-            q = min(float(max(bound[i - 1], measured[i])) / ceil_px, 1.0)
-            cols.append((int(255 * q), int(255 * (1 - q)), 40))
+    def frame_color(i):
+        """Green -> red against the px ceiling; gray during the lead."""
+        if i == 0 or times[i] <= cfg.lead_s:
+            return (128, 128, 128)
+        q = min(float(max(bound[i - 1], measured[i])) / ceil_px, 1.0)
+        return (int(255 * q), int(255 * (1 - q)), 40)
+
+    segs = [np.stack([eyes[i - 1], eyes[i]]) for i in range(1, n)]
+    cols = [frame_color(i) for i in range(1, n)]
     rr.log("world/trajectory", rr.LineStrips3D(segs, colors=cols),
+           static=True)
+
+    # camD optical axis (R_wc column 2) every 5th pose, coloured with the
+    # same ramp, so a violently sweeping aim reads red at a glance
+    idx = range(0, n, 5)
+    rr.log("world/aim",
+           rr.Arrows3D(origins=[eyes[i] for i in idx],
+                       vectors=[R_wc[i][:, 2] * 0.3 for i in idx],
+                       colors=[frame_color(i) for i in idx]),
            static=True)
 
     ref_in = metrics["coverage"][metrics["ref_sock"]]["inside_frames"]
@@ -913,11 +923,18 @@ def export_rerun(path, cfg, geom, times, eyes, R_wc, metrics):
                rr.Points3D(bad, colors=[(255, 40, 40)], radii=0.035),
                static=True)
 
+    # full camD-optical orientation as an RGB axes gizmo on the timeline
+    # entity, so scrubbing shows the rig turning in place, not just where
+    # it points; the per-frame Transform3D below moves it
+    rr.log("world/rig", rr.TransformAxes3D(0.15), static=True)
+
     for i in range(n):
         rr.set_time("frame", sequence=i)
         rr.set_time("t", duration=float(times[i]))
         rr.log("world/eye",
                rr.Points3D([eyes[i]], colors=[(255, 255, 255)], radii=0.03))
+        rr.log("world/rig",
+               rr.Transform3D(translation=eyes[i], mat3x3=R_wc[i]))
         rr.log("metrics/px_per_frame", rr.Scalars(float(measured[i])))
         rr.log("metrics/px_ceiling", rr.Scalars(ceil_px))
         if i < n - 1:
