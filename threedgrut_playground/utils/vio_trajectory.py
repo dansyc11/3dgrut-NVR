@@ -43,6 +43,25 @@ keep working; ARM_REACH is ignored here because clamping breaks C2):
                        the mcap export stamps at the same rate)
   TRACKABLE_PX         per-frame displacement ceiling, default 50 px
   VIO_TRAJ_NPZ         ground-truth output, default mcap_outputs/vio_truth.npz
+  STRESS               motion intensity multiplier, default 1.0. Scales the
+                       phase clock after the ramp, so every oscillation
+                       frequency, angular rate and translation speed scales
+                       together while amplitudes (coverage) and the
+                       stationary lead stay fixed. 1.0 reproduces the
+                       unscaled trajectory bit for bit.
+
+Headless stress-test CLI (no GUI, no GPU):
+  python -m threedgrut_playground.utils.vio_trajectory --dry-run
+      [--calib F] [--cloud F] [--waypoints F | --random N --seed S]
+      [--npz OUT] [--rerun OUT.rrd]
+Runs the same pre-checks verify_path enforces (FOV/visibility, TRACKABLE_PX
+ceiling, C2 finite-difference spike), prints a verdict table plus headline
+numbers, and ALWAYS writes the ground-truth npz - failures included, with
+STRESS/seed/source stamped into the metadata - so failing paths can still be
+rendered later. --waypoints (positions or poses) and --random both fit the
+same C2 periodic cubic spline through rough waypoints, with the stationary
+lead and speed ramp prepended; STRESS laps the waypoint circuit faster.
+--rerun exports a Rerun scene of the run (rerun-sdk in the venv).
 """
 
 import json
@@ -178,6 +197,10 @@ class VioConfig:
             self.motion_s = T_DIST
         self.fps = float(env("VIO_FPS", 20.0))
         self.trackable_px = float(env("TRACKABLE_PX", 50.0))
+        # STRESS multiplies the post-ramp phase clock (see pose_at): x1.0
+        # is exact (a float times 1.0 is itself), so the default path is
+        # bit-identical to the pre-STRESS generator.
+        self.stress = float(env("STRESS", 1.0))
         self.npz_path = env("VIO_TRAJ_NPZ", "mcap_outputs/vio_truth.npz")
         self.total_s = self.lead_s + self.motion_s
         self.n_frames = int(round(self.total_s * self.fps))
@@ -262,8 +285,11 @@ def _look_at_gl(eye, aim, roll_rad):
 
 
 def pose_at(t, cfg, geom):
-    """(eye(3), R_gl(3,3) world->cam rows) at time t. Deterministic, C3."""
-    tau = _tau(t, cfg.lead_s)
+    """(eye(3), R_gl(3,3) world->cam rows) at time t. Deterministic, C3.
+
+    STRESS scales the phase clock: frequencies and therefore all rates go
+    up together, amplitudes (and so coverage) do not move."""
+    tau = _tau(t, cfg.lead_s) * cfg.stress
     w = 2.0 * math.pi
     d_mid = 0.5 * (geom.d_near + geom.d_far)
     d_amp = 0.5 * (geom.d_far - geom.d_near)
@@ -291,14 +317,18 @@ def pose_at(t, cfg, geom):
 F3 = np.diag([1.0, -1.0, -1.0])  # OpenGL camera axes <-> optical (OpenCV)
 
 
-def sample_path(cfg, geom, times=None):
-    """eyes (N,3) and optical camera-to-world rotations R_wc (N,3,3)."""
+def sample_path(cfg, geom, times=None, pose_fn=None):
+    """eyes (N,3) and optical camera-to-world rotations R_wc (N,3,3).
+
+    pose_fn(t) -> (eye, R_gl) overrides the analytic pose_at path (used by
+    the waypoint-spline stress paths); None keeps the default exactly."""
     if times is None:
         times = np.arange(cfg.n_frames) / cfg.fps
     eyes = np.empty((len(times), 3))
     R_wc = np.empty((len(times), 3, 3))
     for i, t in enumerate(times):
-        eye, R_gl = pose_at(float(t), cfg, geom)
+        eye, R_gl = (pose_at(float(t), cfg, geom) if pose_fn is None
+                     else pose_fn(float(t)))
         eyes[i] = eye
         R_wc[i] = R_gl.T @ F3   # columns = optical axes in world
     return np.asarray(times, float), eyes, R_wc
@@ -334,8 +364,11 @@ def _quat_to_rot(q):
         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
 
 
-def export_npz(path, cfg, eyes, R_wc):
-    """Ground truth in ate_compare's npz layout. See the module docstring."""
+def export_npz(path, cfg, eyes, R_wc, extra_meta=None):
+    """Ground truth in ate_compare's npz layout. See the module docstring.
+
+    extra_meta: dict merged into the meta json (the stress CLI stamps
+    STRESS/seed/source/failed checks); None leaves the meta unchanged."""
     t_ns = START_TIME_NS + np.arange(len(eyes), dtype=np.int64) * cfg.interval_ns
     R_cam_body = _quat_to_rot(BODY_Q_CAMD).T   # camd <- body
     q_body = np.empty((len(eyes), 4))
@@ -353,6 +386,8 @@ def export_npz(path, cfg, eyes, R_wc):
               "to the mcap_convertor stamps at Frames Between = 1",
         fps=cfg.fps, stationary_lead_s=cfg.lead_s, motion_s=cfg.motion_s,
         body_q_camd_xyzw=BODY_Q_CAMD.tolist())
+    if extra_meta:
+        meta.update(extra_meta)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     np.savez(path, t_ns=t_ns, p=eyes, q_xyzw=q_body,
              p_camd=eyes, q_xyzw_camd=q_camd, meta=json.dumps(meta))
@@ -373,14 +408,26 @@ def _rotvec(Ra, Rb):
         [R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
 
 
-def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
-    """All path checks; raises AssertionError on any violation.
+def _spike_ratio(mag, motion_mask):
+    """max / 95th percentile of a finite-difference magnitude series over
+    the motion phase. Smooth signals sit near 1; a C2 break shows as an
+    isolated spike whose ratio grows with fps."""
+    m = mag[motion_mask[:len(mag)]]
+    if len(m) == 0 or m.max() <= 1e-9:
+        return 1.0
+    return float(m.max() / max(np.percentile(m, 95.0), 1e-9))
 
-    Returns a metrics dict and prints the summary table. check_cams: KB4
-    sockets that must reach all four image quadrants and both distance
-    bands (default: every KB4 camera except socket 0 - camA points away
-    from the boards on this product and is not consumed by the driver).
+
+def run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
+    """Evaluate every path check without raising.
+
+    Returns (metrics, checks). checks is (name, ok, message, strict) in
+    verify_path's historical assert order; strict=False entries (the C2
+    finite-difference spike check) never raise in verify_path and show only
+    in the dry-run verdict table. metrics adds per-frame series (speed,
+    angular rate, px displacement) for the dry-run and Rerun exports.
     """
+    checks = []
     n = len(times)
     dt = 1.0 / cfg.fps
     pts_w = geom.cloud
@@ -392,11 +439,14 @@ def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
     band_w = geom.d_far - geom.d_near
     near_f = dists <= geom.d_near + 0.15 * band_w
     far_f = dists >= geom.d_far - 0.15 * band_w
-    assert near_f.any() and far_f.any(), "distance bands not both visited"
+    checks.append(("distance bands visited",
+                   bool(near_f.any() and far_f.any()),
+                   "distance bands not both visited", True))
 
     # per-camera projections over the whole path
     cams = {s: rig[s] for s in set(list(rig)) }
     cov = {}
+    steps_frame = np.zeros(n)   # measured corner step into frame i, max cam
     for s, cam in cams.items():
         w, h = cam["width"], cam["height"]
         cx, cy = cam["params"]["cx"], cam["params"]["cy"]
@@ -437,22 +487,28 @@ def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
                 if both.any():
                     step = np.linalg.norm(px[both] - prev_px[both], axis=1).max()
                     max_step = max(max_step, float(step))
+                    steps_frame[i] = max(steps_frame[i], float(step))
             prev_px, prev_ok = px, inside
         cov[s] = dict(quad=quad, hist=hist, span_u=(umin, umax),
                       span_v=(vmin, vmax), near=in_near, far=in_far,
-                      max_step_px=max_step, always_inside=bool(inside_all.all()))
+                      max_step_px=max_step, always_inside=bool(inside_all.all()),
+                      inside_frames=inside_all)
 
     # boards stay in view of the reference camera, every frame
-    assert cov[ref_sock]["always_inside"], \
-        "board corners leave the reference camera's image"
+    checks.append(("boards inside reference cam",
+                   bool(cov[ref_sock]["always_inside"]),
+                   "board corners leave the reference camera's image", True))
 
     for s in check_cams:
         c = cov[s]
-        assert (c["quad"] > 0).all(), \
-            f"socket {s}: quadrant counts {c['quad'].tolist()} - not all four"
-        assert c["near"] > 0 and c["far"] > 0, \
-            f"socket {s}: corners missing from a distance band " \
-            f"(near {c['near']}, far {c['far']})"
+        checks.append((f"quadrant coverage cam{'abcd'[s]}",
+                       bool((c["quad"] > 0).all()),
+                       f"socket {s}: quadrant counts {c['quad'].tolist()} - not all four",
+                       True))
+        checks.append((f"both bands seen by cam{'abcd'[s]}",
+                       bool(c["near"] > 0 and c["far"] > 0),
+                       f"socket {s}: corners missing from a distance band "
+                       f"(near {c['near']}, far {c['far']})", True))
 
     # kinematics
     v = np.gradient(eyes, dt, axis=0)
@@ -478,22 +534,69 @@ def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
     px_bound = f_max * dth + f_max * dp / d_min[:-1]
     peak["px_formula"] = float(px_bound.max())
     peak["px_measured"] = max(c["max_step_px"] for c in cov.values())
-    assert peak["px_formula"] <= cfg.trackable_px, \
-        f"per-frame displacement bound {peak['px_formula']:.1f} px exceeds " \
-        f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)"
-    assert peak["px_measured"] <= cfg.trackable_px, \
-        f"measured corner step {peak['px_measured']:.1f} px exceeds " \
-        f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)"
+    checks.append(("px formula <= ceiling",
+                   peak["px_formula"] <= cfg.trackable_px,
+                   f"per-frame displacement bound {peak['px_formula']:.1f} px exceeds "
+                   f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)",
+                   True))
+    checks.append(("px measured <= ceiling",
+                   peak["px_measured"] <= cfg.trackable_px,
+                   f"measured corner step {peak['px_measured']:.1f} px exceeds "
+                   f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)",
+                   True))
 
-    # summary table (also the report the caller prints for the user)
+    # C2 finite-difference spike check (advisory: verify_path never raises
+    # on it, the dry-run verdict table shows it)
+    # Threshold 20 measured empirically: smooth analytic path 4.2, a C2-legal
+    # spline's knot jerk steps 5.3, while genuine breaks (a velocity hold, a
+    # one-frame position glitch) score 130 and 1400.
+    motion = np.asarray(times, float) >= cfg.lead_s
+    jr = _spike_ratio(np.linalg.norm(jerk, axis=1), motion)
+    ar = _spike_ratio(np.linalg.norm(alpha, axis=1), motion)
+    checks.append(("C2 finite-diff spike", bool(jr < 20.0 and ar < 20.0),
+                   f"jerk spike ratio {jr:.1f}, angular accel spike ratio "
+                   f"{ar:.1f} (max/95th pct over the motion phase, smooth < 20)",
+                   False))
+
+    series = dict(speed=np.linalg.norm(v, axis=1),
+                  ang_rate=np.linalg.norm(wvec, axis=1),
+                  px_formula=px_bound, px_measured=steps_frame)
+    metrics = dict(peak=peak, coverage=cov, near_frames=int(near_f.sum()),
+                   far_frames=int(far_f.sum()), series=series,
+                   spike=dict(jerk_ratio=jr, alpha_ratio=ar),
+                   ref_sock=ref_sock, check_cams=check_cams)
+    return metrics, checks
+
+
+def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
+    """All path checks; raises AssertionError on any violation.
+
+    Returns a metrics dict and prints the summary table. check_cams: KB4
+    sockets that must reach all four image quadrants and both distance
+    bands (default: every KB4 camera except socket 0 - camA points away
+    from the boards on this product and is not consumed by the driver).
+    """
+    metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes,
+                                 R_wc, check_cams)
+    for _name, ok, msg, strict in checks:
+        if strict and not ok:
+            raise AssertionError(msg)
+    _print_table(cfg, geom, rig, metrics, len(times))
+    return metrics
+
+
+def _print_table(cfg, geom, rig, metrics, n):
+    """verify_path's summary table, byte for byte the historical output."""
+    peak, cov, cams = metrics["peak"], metrics["coverage"], rig
+    near_frames, far_frames = metrics["near_frames"], metrics["far_frames"]
     print(f"[vio] | quantity | value |")
     print(f"[vio] |----|----|")
     print(f"[vio] | duration | {cfg.total_s:.1f} s = {cfg.lead_s:.1f} s "
           f"parked + {cfg.motion_s:.1f} s motion, {n} frames @ "
           f"{cfg.fps:g} fps |")
     print(f"[vio] | distance bands | near {geom.d_near:.2f} m "
-          f"({int(near_f.sum())} frames), far {geom.d_far:.2f} m "
-          f"({int(far_f.sum())} frames) |")
+          f"({near_frames} frames), far {geom.d_far:.2f} m "
+          f"({far_frames} frames) |")
     print(f"[vio] | peak translation | {peak['v']:.2f} m/s, "
           f"{peak['a']:.2f} m/s^2 |")
     print(f"[vio] | peak rotation | {math.degrees(peak['w']):.1f} deg/s, "
@@ -513,8 +616,6 @@ def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
         print(f"[vio] cam{'abcd'[s]} corner histogram (rows top->bottom):")
         for row in cov[s]["hist"]:
             print("[vio]   " + " ".join(f"{v:6d}" for v in row))
-    return dict(peak=peak, coverage=cov, near_frames=int(near_f.sum()),
-                far_frames=int(far_f.sum()))
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +652,9 @@ def _gather_scene(gui, name_hint):
 def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     """Build the VIO path into the playground trajectory + export truth."""
     cfg = VioConfig()
+    if cfg.stress != 1.0:
+        print(f"[vio] STRESS={cfg.stress:g}: frequencies and rates scaled, "
+              f"amplitudes and the stationary lead unchanged")
     cloud, center, normal, label = _gather_scene(gui, name_hint)
     if flip or os.environ.get("ORBIT_FLIP"):
         print("[vio] WARNING ORBIT_FLIP set: camera will be behind the "
@@ -569,7 +673,9 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
 
     times, eyes, R_wc = sample_path(cfg, geom)
     verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc)
-    t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc)
+    extra = (dict(stress=cfg.stress, source="analytic")
+             if cfg.stress != 1.0 else None)
+    t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc, extra_meta=extra)
     print(f"[vio] ground truth: {cfg.npz_path} ({len(t_ns)} poses, "
           f"T_world_body, stamps matching the mcap export)")
 
@@ -593,3 +699,340 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     print(f"[vio] {cfg.n_frames} frames ({cfg.n_frames + 1} poses incl. the "
           f"unrendered tail) into the trajectory")
     return poses
+
+
+# ---------------------------------------------------------------------------
+# Waypoint paths (stress testing): one C2 periodic cubic spline for both
+# --waypoints files and --random rough waypoints. The circuit is closed so
+# any phase maps smoothly and STRESS simply laps it faster; the stationary
+# lead and the C3 speed ramp are prepended exactly like the analytic path.
+
+class _PeriodicSpline:
+    """C2 periodic cubic spline through k points over a fixed phase period.
+
+    Uniform knots, cyclic second-derivative system solved densely (k is
+    small). values: (k,) or (k, d). Evaluation wraps modulo the period."""
+
+    def __init__(self, values, period):
+        y = np.asarray(values, float)
+        k = len(y)
+        if k < 3:
+            raise ValueError(f"need at least 3 waypoints, got {k}")
+        h = period / k
+        A = np.zeros((k, k))
+        for i in range(k):
+            A[i, (i - 1) % k] += 1.0
+            A[i, i] += 4.0
+            A[i, (i + 1) % k] += 1.0
+        rhs = 6.0 * (np.roll(y, 1, axis=0) - 2.0 * y
+                     + np.roll(y, -1, axis=0)) / (h * h)
+        self.M = np.linalg.solve(A, rhs)
+        self.y, self.h, self.period, self.k = y, h, period, k
+
+    def __call__(self, phase):
+        u = phase % self.period
+        i = int(u // self.h) % self.k
+        j = (i + 1) % self.k
+        t = u - i * self.h
+        h, y, M = self.h, self.y, self.M
+        return ((M[i] * (h - t) ** 3 + M[j] * t ** 3) / (6.0 * h)
+                + (y[i] / h - M[i] * h / 6.0) * (h - t)
+                + (y[j] / h - M[j] * h / 6.0) * t)
+
+
+def spline_pose_fn(cfg, geom, way_eyes, way_aims=None, way_rolls=None):
+    """pose_fn for sample_path: C2 spline circuit through the waypoints.
+
+    The circuit period is the motion phase available at STRESS=1, so one
+    full lap fills VIO_MOTION_S and STRESS>1 laps proportionally faster.
+    Position-only waypoints aim at the board centre with zero roll; pose
+    waypoints spline the aim points and (unwrapped) rolls too."""
+    period = _tau(cfg.total_s, cfg.lead_s)
+    s_eye = _PeriodicSpline(way_eyes, period)
+    s_aim = _PeriodicSpline(way_aims, period) if way_aims is not None else None
+    s_roll = (_PeriodicSpline(np.asarray(way_rolls, float), period)
+              if way_rolls is not None else None)
+
+    def fn(t):
+        phase = _tau(t, cfg.lead_s) * cfg.stress
+        eye = s_eye(phase)
+        aim = s_aim(phase) if s_aim is not None else geom.center
+        roll = float(s_roll(phase)) if s_roll is not None else 0.0
+        return eye, _look_at_gl(eye, np.asarray(aim, float), roll)
+    return fn
+
+
+def random_waypoints(geom, n, seed):
+    """N rough waypoints in the boards' viewing volume: distance uniform in
+    the [d_near, d_far] bands, azimuth +-40 deg and elevation +-25 deg
+    around the board normal. Successive waypoints are uncorrelated, which
+    is the point - the spline between them is smooth but violent."""
+    if n < 3:
+        raise ValueError(f"--random needs at least 3 waypoints, got {n}")
+    rng = np.random.default_rng(seed)
+    d = rng.uniform(geom.d_near, geom.d_far, n)
+    az = np.radians(rng.uniform(-40.0, 40.0, n))
+    el = np.radians(rng.uniform(-25.0, 25.0, n))
+    return (geom.center[None]
+            + geom.fwd[None] * (d * np.cos(el) * np.cos(az))[:, None]
+            + geom.right[None] * (d * np.cos(el) * np.sin(az))[:, None]
+            + geom.up[None] * (d * np.sin(el))[:, None])
+
+
+def _load_waypoints(path):
+    """Waypoint file -> (positions (N,3), q_xyzw (N,4) or None).
+
+    Quaternions are camD-optical camera-to-world (like the truth npz's
+    q_xyzw_camd). Formats: .npz with key p (+ q_xyzw_camd, or q_xyzw =
+    T_world_body which is converted back through BODY_Q_CAMD - so a truth
+    export replays directly); .json list of [x,y,z] or
+    [x,y,z,qx,qy,qz,qw]; .csv/.txt rows of 3 or 7 floats.
+
+    Consecutive duplicate positions are dropped: a truth export embeds its
+    own parked lead as coincident points, and coincident spline knots make
+    the circuit park there and then sprint."""
+    if path.endswith(".npz"):
+        d = np.load(path)
+        p = np.asarray(d["p"], float)
+        if "q_xyzw_camd" in d:
+            q = np.asarray(d["q_xyzw_camd"], float)
+        elif "q_xyzw" in d:
+            R_cam_body = _quat_to_rot(BODY_Q_CAMD).T
+            q = np.array([_rot_to_quat(_quat_to_rot(qb) @ R_cam_body.T)
+                          for qb in np.asarray(d["q_xyzw"], float)])
+        else:
+            q = None
+    else:
+        rows = (json.load(open(path)) if path.endswith(".json")
+                else np.loadtxt(path, delimiter=",", comments="#", ndmin=2))
+        arr = np.asarray(rows, float)
+        if arr.ndim != 2 or arr.shape[1] not in (3, 7):
+            raise ValueError(f"{path}: rows must be xyz or xyz+quat, "
+                             f"got shape {arr.shape}")
+        p = arr[:, :3]
+        q = arr[:, 3:7] if arr.shape[1] == 7 else None
+    keep = np.ones(len(p), bool)
+    keep[1:] = np.linalg.norm(np.diff(p, axis=0), axis=1) > 1e-9
+    if not keep.all():
+        print(f"[vio] waypoints: dropped {int((~keep).sum())} consecutive "
+              f"duplicate positions of {len(p)}")
+    return p[keep], (q[keep] if q is not None else None)
+
+
+def _pose_waypoint_channels(eyes, quats, geom):
+    """Pose waypoints -> (aim points, unwrapped rolls) for the spline fit.
+
+    aim = eye + optical-forward x distance-to-board-centre; roll is the
+    rotation of the actual frame against the zero-roll look-at frame."""
+    aims = np.empty((len(eyes), 3))
+    rolls = np.empty(len(eyes))
+    for i, (eye, q) in enumerate(zip(np.asarray(eyes, float), quats)):
+        R_wc = _quat_to_rot(np.asarray(q, float))
+        fwd = R_wc[:, 2]
+        d = max(float(np.linalg.norm(geom.center - eye)), 0.5)
+        aims[i] = eye + fwd * d
+        base = _look_at_gl(eye, aims[i], 0.0)
+        R_gl = (R_wc @ F3).T
+        rolls[i] = math.atan2(float(R_gl[0] @ base[1]),
+                              float(R_gl[0] @ base[0]))
+    return aims, np.unwrap(rolls)
+
+
+# ---------------------------------------------------------------------------
+# Headless dry-run / Rerun export (no GUI, no GPU)
+
+def _default_cloud():
+    """Stand-in for the live scene: the stock single 4x7 board at 30 cm tag
+    pitch (half extents 1.410 x 0.825 m, the GUI's 30 cm reset), centred at
+    the origin with normal +z, sampled as a 3x3 corner grid. PathGeometry
+    and the checks only use the cloud relative to its centre, so this is
+    equivalent to the default playground scene."""
+    xs = np.linspace(-1.410, 1.410, 3)
+    ys = np.linspace(-0.825, 0.825, 3)
+    return np.array([[x, y, 0.0] for y in ys for x in xs])
+
+
+def _load_cloud(path):
+    """Board vertex cloud (N,3) from .npy/.npz/.json/.csv."""
+    if path.endswith(".npy"):
+        c = np.load(path)
+    elif path.endswith(".npz"):
+        d = np.load(path)
+        c = d["cloud"] if "cloud" in d else d[list(d.keys())[0]]
+    elif path.endswith(".json"):
+        c = np.asarray(json.load(open(path)), float)
+    else:
+        c = np.loadtxt(path, delimiter=",", comments="#", ndmin=2)
+    c = np.asarray(c, float)
+    if c.ndim != 2 or c.shape[1] != 3:
+        raise ValueError(f"{path}: expected (N,3) vertices, got {c.shape}")
+    return c
+
+
+def export_rerun(path, cfg, geom, times, eyes, R_wc, metrics):
+    """Rerun scene: board AABB + points, the trajectory as a 3D line
+    coloured by per-frame pixel displacement (green -> red against the
+    TRACKABLE_PX ceiling, gray for the stationary lead), red markers at
+    check-failure frames, and scalar timelines (angular rate, per-frame px,
+    ceiling) so scrubbing shows when the motion gets violent."""
+    import rerun as rr
+    rr.init("vio_stress", spawn=False)
+    rr.save(path)
+    n = len(eyes)
+    bound = metrics["series"]["px_formula"]      # (n-1,) design formula
+    measured = metrics["series"]["px_measured"]  # (n,) corner step into i
+    ang = metrics["series"]["ang_rate"]          # (n-1,) rad/s
+    ceil_px = cfg.trackable_px
+
+    mn, mx = geom.cloud.min(0), geom.cloud.max(0)
+    rr.log("world/boards",
+           rr.Boxes3D(centers=[(mn + mx) / 2.0],
+                      half_sizes=[np.maximum((mx - mn) / 2.0, 0.02)],
+                      colors=[(80, 140, 255)]),
+           static=True)
+    rr.log("world/board_points",
+           rr.Points3D(geom.cloud, colors=[(80, 140, 255)], radii=0.02),
+           static=True)
+
+    segs, cols = [], []
+    for i in range(1, n):
+        segs.append(np.stack([eyes[i - 1], eyes[i]]))
+        if times[i] <= cfg.lead_s:
+            cols.append((128, 128, 128))
+        else:
+            q = min(float(max(bound[i - 1], measured[i])) / ceil_px, 1.0)
+            cols.append((int(255 * q), int(255 * (1 - q)), 40))
+    rr.log("world/trajectory", rr.LineStrips3D(segs, colors=cols),
+           static=True)
+
+    ref_in = metrics["coverage"][metrics["ref_sock"]]["inside_frames"]
+    bad = [eyes[i] for i in range(1, n)
+           if max(bound[i - 1], measured[i]) > ceil_px or not ref_in[i]]
+    if bad:
+        rr.log("world/check_failures",
+               rr.Points3D(bad, colors=[(255, 40, 40)], radii=0.035),
+               static=True)
+
+    for i in range(n):
+        rr.set_time("frame", sequence=i)
+        rr.set_time("t", duration=float(times[i]))
+        rr.log("world/eye",
+               rr.Points3D([eyes[i]], colors=[(255, 255, 255)], radii=0.03))
+        rr.log("metrics/px_per_frame", rr.Scalars(float(measured[i])))
+        rr.log("metrics/px_ceiling", rr.Scalars(ceil_px))
+        if i < n - 1:
+            rr.log("metrics/angular_rate_deg_s",
+                   rr.Scalars(math.degrees(float(ang[i]))))
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="vio_trajectory",
+        description="Headless VIO trajectory stress tester (no GUI, no "
+                    "GPU). STRESS env scales motion intensity; see the "
+                    "module docstring.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="build the path, run verify_path's checks, print "
+                         "a verdict table, write the truth npz even on "
+                         "failure")
+    ap.add_argument("--calib",
+                    default="calibration_files/DP180IP-30020104.json",
+                    help="device calibration JSON (default: the real "
+                         "Aug 17 unit, serial 30.02.0104)")
+    ap.add_argument("--cloud",
+                    help="board vertex file (N,3): .npy/.npz/.json/.csv; "
+                         "default: the stock 4x7 board at 30 cm pitch, "
+                         "origin-centred, normal +z")
+    ap.add_argument("--waypoints",
+                    help="waypoint file (.npz p [+ q_xyzw_camd/q_xyzw], "
+                         ".json or .csv rows of xyz or xyz+quat), fitted "
+                         "with the C2 periodic spline")
+    ap.add_argument("--random", type=int, metavar="N",
+                    help="N rough random waypoints in the boards' viewing "
+                         "volume, same C2 spline")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="rng seed for --random (default 0)")
+    ap.add_argument("--npz",
+                    help="truth output path (default: VIO_TRAJ_NPZ env or "
+                         "mcap_outputs/vio_truth.npz)")
+    ap.add_argument("--rerun", metavar="OUT.rrd",
+                    help="export a Rerun scene of the run")
+    args = ap.parse_args(argv)
+    if not args.dry_run and not args.rerun:
+        ap.error("nothing to do: pass --dry-run and/or --rerun")
+    if args.waypoints and args.random:
+        ap.error("--waypoints and --random are mutually exclusive")
+
+    cfg = VioConfig()
+    if args.npz:
+        cfg.npz_path = args.npz
+    cloud = _load_cloud(args.cloud) if args.cloud else _default_cloud()
+    rig, ref_sock = load_rig(args.calib)
+    center = 0.5 * (cloud.min(0) + cloud.max(0))
+    geom = PathGeometry(cloud, center, np.array([0.0, 0.0, 1.0]),
+                        rig[ref_sock])
+
+    seed = None
+    if args.waypoints:
+        way_eyes, quats = _load_waypoints(args.waypoints)
+        aims = rolls = None
+        if quats is not None:
+            aims, rolls = _pose_waypoint_channels(way_eyes, quats, geom)
+        pose_fn = spline_pose_fn(cfg, geom, way_eyes, aims, rolls)
+        source = f"waypoints {args.waypoints} ({len(way_eyes)} points)"
+    elif args.random:
+        seed = args.seed
+        way_eyes = random_waypoints(geom, args.random, seed)
+        pose_fn = spline_pose_fn(cfg, geom, way_eyes)
+        source = f"random {args.random} seed {seed}"
+    else:
+        pose_fn = None
+        source = "analytic"
+
+    times, eyes, R_wc = sample_path(cfg, geom, pose_fn=pose_fn)
+    metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc)
+
+    print(f"=== vio dry-run: {source}, STRESS={cfg.stress:g} ===")
+    print(f"calib {args.calib} (ref cam{'abcd'[ref_sock]}, "
+          f"{rig[ref_sock]['model']}), {len(times)} frames @ {cfg.fps:g} "
+          f"fps, {cfg.lead_s:g} s lead + {cfg.motion_s:g} s motion")
+    print(f"bands {geom.d_near:.2f}..{geom.d_far:.2f} m, aim budget "
+          f"({geom.bud_x:.0f}, {geom.bud_y:.0f}) deg")
+    width = max(len(c[0]) for c in checks)
+    n_fail = n_warn = 0
+    for name, ok, msg, strict in checks:
+        if not ok:
+            if strict:
+                n_fail += 1
+            else:
+                n_warn += 1
+        tag = "PASS" if ok else ("FAIL" if strict else "WARN")
+        print(f"  {name:<{width}}  {tag}" + ("" if ok else f"  {msg}"))
+    peak = metrics["peak"]
+    print(f"headline: peak angular rate {math.degrees(peak['w']):.1f} "
+          f"deg/s, peak speed {peak['v']:.2f} m/s, peak per-frame px "
+          f"{max(peak['px_formula'], peak['px_measured']):.1f} "
+          f"(ceiling {cfg.trackable_px:g})")
+    quads = {f"cam{'abcd'[s]}": metrics["coverage"][s]["quad"].tolist()
+             for s in sorted(metrics["coverage"])}
+    print(f"coverage quadrants: {quads}")
+    verdict = "PASS" if n_fail == 0 else f"{n_fail} check(s) failed"
+    if n_warn:
+        verdict += f", {n_warn} warning(s)"
+    print(f"verdict: {verdict}")
+
+    extra = dict(stress=cfg.stress, source=source, seed=seed,
+                 failed_checks=[c[0] for c in checks if not c[1]])
+    export_npz(cfg.npz_path, cfg, eyes, R_wc, extra_meta=extra)
+    print(f"npz: {cfg.npz_path} (written regardless of failures)")
+
+    if args.rerun:
+        export_rerun(args.rerun, cfg, geom, times, eyes, R_wc, metrics)
+        print(f"rerun: {args.rerun}")
+    return 0 if n_fail == 0 else 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
