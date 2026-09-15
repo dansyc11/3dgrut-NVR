@@ -719,11 +719,27 @@ class MixtureOfGaussians(torch.nn.Module):
 
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
+        # SH degree stored in the file: the header carries 3*((deg+1)^2 - 1) f_rest_* properties
+        file_num_speculars = len(extra_f_names) // 3
+        file_sh_degree = int(round((file_num_speculars + 1) ** 0.5)) - 1
+        if 3 * ((file_sh_degree + 1) ** 2 - 1) != len(extra_f_names):
+            raise ValueError(f"{mogt_path}: {len(extra_f_names)} f_rest_* properties do not form a whole SH degree")
         num_speculars = (self.max_n_features + 1) ** 2 - 1
-        assert len(extra_f_names)==3*num_speculars
-        mogt_specular = np.zeros((num_gaussians, len(extra_f_names)))
+        if file_sh_degree > self.max_n_features:
+            raise ValueError(
+                f"{mogt_path} stores SH degree {file_sh_degree} but the config expects "
+                f"{self.max_n_features}; cannot truncate higher-order coefficients.")
+        # A sub-degree file is zero-padded channel-major up to the config degree. The SH
+        # decoder compiled from the slang kernels always fetches (degree+1)^2 coefficients
+        # per Gaussian regardless of the runtime sphDegree (PARTICLE_RADIANCE_NUM_COEFFS
+        # is baked into the generated gaussianParticles.cuh; see setup_playground.py), so
+        # the buffer must be packed at the config degree. Zeros in the higher-order slots
+        # are render-identical to the file's native degree: SH decode is linear in the
+        # coefficients. When file degree == config degree this fill is the original one.
+        mogt_specular = np.zeros((num_gaussians, 3 * num_speculars))
         for idx, attr_name in enumerate(extra_f_names):
-            mogt_specular[:, idx] = np.asarray(plydata.elements[0][attr_name])
+            ch, k = divmod(idx, file_num_speculars)
+            mogt_specular[:, ch * num_speculars + k] = np.asarray(plydata.elements[0][attr_name])
         mogt_specular = mogt_specular.reshape((num_gaussians,3,num_speculars))
         mogt_specular = mogt_specular.transpose(0, 2, 1).reshape((num_gaussians,num_speculars*3))
 
