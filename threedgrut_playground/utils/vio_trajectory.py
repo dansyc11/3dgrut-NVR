@@ -43,6 +43,15 @@ keep working; ARM_REACH is ignored here because clamping breaks C2):
                        the mcap export stamps at the same rate)
   TRACKABLE_PX         per-frame displacement ceiling, default 50 px
   VIO_TRAJ_NPZ         ground-truth output, default mcap_outputs/vio_truth.npz
+  VIO_WAYPOINTS        waypoint file (same formats as --waypoints below).
+                       build_vio_trajectory then renders the C2 spline
+                       circuit through these waypoints - the same pose
+                       function, phase clock (lead, ramp, STRESS) and
+                       sampling as the dry-run, so the truth npz matches
+                       the dry-run's bit for bit. Check failures WARN
+                       instead of raising (waypoint scenes, e.g. the campus
+                       corridor, may hold no boards). Unset: the analytic
+                       path, byte for byte as before.
   STRESS               motion intensity multiplier, default 1.0. Scales the
                        phase clock after the ramp, so every oscillation
                        frequency, angular rate and translation speed scales
@@ -211,6 +220,10 @@ class VioConfig:
         # bit-identical to the pre-STRESS generator.
         self.stress = float(env("STRESS", 1.0))
         self.alignment_path = env("SCENE_ALIGNMENT")
+        # Waypoint file for build_vio_trajectory: render the same C2
+        # spline circuit the dry-run's --waypoints builds. Unset (the
+        # default) keeps the analytic pose_at path exactly.
+        self.waypoints_path = env("VIO_WAYPOINTS")
         self.npz_path = env("VIO_TRAJ_NPZ", "mcap_outputs/vio_truth.npz")
         self.total_s = self.lead_s + self.motion_s
         self.n_frames = int(round(self.total_s * self.fps))
@@ -690,11 +703,41 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     print(f"[vio] bands {geom.d_near:.2f}..{geom.d_far:.2f} m, aim budget "
           f"({geom.bud_x:.0f}, {geom.bud_y:.0f}) deg")
 
-    times, eyes, R_wc = sample_path(cfg, geom)
-    verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc)
+    pose_fn = None
+    if cfg.waypoints_path:
+        way_eyes, quats = _load_waypoints(cfg.waypoints_path)
+        aims = rolls = None
+        if quats is not None:
+            aims, rolls = _pose_waypoint_channels(way_eyes, quats, geom)
+        pose_fn = spline_pose_fn(cfg, geom, way_eyes, aims, rolls)
+        print(f"[vio] VIO_WAYPOINTS {cfg.waypoints_path}: C2 spline "
+              f"circuit through {len(way_eyes)} waypoints replaces the "
+              f"analytic path (same lead/ramp/STRESS phase clock as the "
+              f"dry-run)")
+
+    times, eyes, R_wc = sample_path(cfg, geom, pose_fn=pose_fn)
+    if pose_fn is None:
+        verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc)
+        checks = None
+    else:
+        # Waypoint circuits may run in board-free scenes (campus corridor),
+        # where the visibility checks fail by design: warn like the dry-run
+        # instead of raising, and stamp the failures into the npz meta.
+        metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes,
+                                     R_wc)
+        for name, ok, msg, _strict in checks:
+            if not ok:
+                print(f"[vio] WARN {name}: {msg}")
+        _print_table(cfg, geom, rig, metrics, len(times))
     extra = {}
     if cfg.stress != 1.0:
         extra.update(stress=cfg.stress, source="analytic")
+    if pose_fn is not None:
+        extra.update(stress=cfg.stress,
+                     source=f"waypoints {cfg.waypoints_path} "
+                            f"({len(way_eyes)} points)",
+                     seed=None,
+                     failed_checks=[c[0] for c in checks if not c[1]])
     if align is not None:
         extra["alignment"] = align.meta_dict()
     t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc,
@@ -723,7 +766,8 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     tail_t = cfg.n_frames / cfg.fps
     for i in range(cfg.n_frames + 1):
         t = tail_t if i == cfg.n_frames else float(times[i])
-        eye, R_gl = pose_at(t, cfg, geom)
+        eye, R_gl = (pose_at(t, cfg, geom) if pose_fn is None
+                     else pose_fn(t))
         if align is not None:
             eye = align.metric_to_scene_units(eye)
         view = np.eye(4)
