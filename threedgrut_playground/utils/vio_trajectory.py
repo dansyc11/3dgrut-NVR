@@ -49,6 +49,14 @@ keep working; ARM_REACH is ignored here because clamping breaks C2):
                        together while amplitudes (coverage) and the
                        stationary lead stay fixed. 1.0 reproduces the
                        unscaled trajectory bit for bit.
+  SCENE_ALIGNMENT      path to a scene's lidar_alignment.json (see
+                       scene_alignment.py). When set, the scene cloud is
+                       converted to metres on ingestion, the whole design
+                       and the truth npz stay METRIC (scene axes), and
+                       positions convert to scene units only at the render
+                       boundary; the rig extrinsic translations compose in
+                       scene units during rendering too. Unset: the
+                       historical behaviour, scene units treated as metres.
 
 Headless stress-test CLI (no GUI, no GPU):
   python -m threedgrut_playground.utils.vio_trajectory --dry-run
@@ -70,6 +78,7 @@ import os
 
 import numpy as np
 
+from threedgrut_playground.utils import scene_alignment
 from threedgrut_playground.utils.orbit_trajectory import (
     FIT_HALF_FOV_X_DEG, FIT_HALF_FOV_Y_DEG, UP_AXIS, board_frame, frame_from)
 
@@ -201,6 +210,7 @@ class VioConfig:
         # is exact (a float times 1.0 is itself), so the default path is
         # bit-identical to the pre-STRESS generator.
         self.stress = float(env("STRESS", 1.0))
+        self.alignment_path = env("SCENE_ALIGNMENT")
         self.npz_path = env("VIO_TRAJ_NPZ", "mcap_outputs/vio_truth.npz")
         self.total_s = self.lead_s + self.motion_s
         self.n_frames = int(round(self.total_s * self.fps))
@@ -656,6 +666,15 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
         print(f"[vio] STRESS={cfg.stress:g}: frequencies and rates scaled, "
               f"amplitudes and the stationary lead unchanged")
     cloud, center, normal, label = _gather_scene(gui, name_hint)
+    align = None
+    if cfg.alignment_path:
+        align = scene_alignment.load(cfg.alignment_path)
+        cloud = cloud * align.scale
+        center = center * align.scale
+        print(f"[vio] SCENE_ALIGNMENT {cfg.alignment_path}: scene is "
+              f"{align.scale:.4f} m/unit. Scene cloud converted to metres; "
+              f"the design and the truth npz are METRIC (scene axes); "
+              f"poses convert to scene units at the render boundary only")
     if flip or os.environ.get("ORBIT_FLIP"):
         print("[vio] WARNING ORBIT_FLIP set: camera will be behind the "
               "boards and tags will be mirrored")
@@ -673,15 +692,29 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
 
     times, eyes, R_wc = sample_path(cfg, geom)
     verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc)
-    extra = (dict(stress=cfg.stress, source="analytic")
-             if cfg.stress != 1.0 else None)
-    t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc, extra_meta=extra)
+    extra = {}
+    if cfg.stress != 1.0:
+        extra.update(stress=cfg.stress, source="analytic")
+    if align is not None:
+        extra["alignment"] = align.meta_dict()
+    t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc,
+                      extra_meta=extra or None)
     print(f"[vio] ground truth: {cfg.npz_path} ({len(t_ns)} poses, "
           f"T_world_body, stamps matching the mcap export)")
 
     # the mcap export must stamp at the same rate the path was sampled at
     os.environ["PLAYGROUND_FPS"] = str(cfg.fps)
     print(f"[vio] PLAYGROUND_FPS={cfg.fps:g} set for the mcap export")
+
+    if align is not None:
+        # Render boundary: the rig pose below converts to scene units, and
+        # the renderer must compose its metric extrinsic translations in
+        # scene units too, or the rendered stereo baseline disagrees with
+        # the metric calibration embedded in the messages by the scale.
+        nvr.v_device.metres_per_unit = align.scale
+        print(f"[vio] render boundary: positions /= {align.scale:.4f} to "
+              f"scene units; rig extrinsic translations compose in scene "
+              f"units (message-embedded calibration stays metric)")
 
     nvr.create_new_trajectory()
     origin = nvr.get_origin_camera_index()
@@ -691,6 +724,8 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     for i in range(cfg.n_frames + 1):
         t = tail_t if i == cfg.n_frames else float(times[i])
         eye, R_gl = pose_at(t, cfg, geom)
+        if align is not None:
+            eye = align.metric_to_scene_units(eye)
         view = np.eye(4)
         view[:3, :3] = R_gl
         view[:3, 3] = -R_gl @ eye
@@ -970,6 +1005,12 @@ def main(argv=None):
                          "volume, same C2 spline")
     ap.add_argument("--seed", type=int, default=0,
                     help="rng seed for --random (default 0)")
+    ap.add_argument("--alignment",
+                    help="scene lidar_alignment.json (overrides the "
+                         "SCENE_ALIGNMENT env). --cloud files are then "
+                         "read as scene units and converted to metres; "
+                         "waypoints and the built-in default board are "
+                         "designed quantities and stay metric")
     ap.add_argument("--npz",
                     help="truth output path (default: VIO_TRAJ_NPZ env or "
                          "mcap_outputs/vio_truth.npz)")
@@ -984,7 +1025,15 @@ def main(argv=None):
     cfg = VioConfig()
     if args.npz:
         cfg.npz_path = args.npz
+    if args.alignment:
+        cfg.alignment_path = args.alignment
+    align = (scene_alignment.load(cfg.alignment_path)
+             if cfg.alignment_path else None)
     cloud = _load_cloud(args.cloud) if args.cloud else _default_cloud()
+    if align is not None and args.cloud:
+        cloud = cloud * align.scale
+        print(f"[vio] alignment {cfg.alignment_path}: --cloud converted "
+              f"from scene units at {align.scale:.4f} m/unit")
     rig, ref_sock = load_rig(args.calib)
     center = 0.5 * (cloud.min(0) + cloud.max(0))
     geom = PathGeometry(cloud, center, np.array([0.0, 0.0, 1.0]),
@@ -1041,6 +1090,8 @@ def main(argv=None):
 
     extra = dict(stress=cfg.stress, source=source, seed=seed,
                  failed_checks=[c[0] for c in checks if not c[1]])
+    if align is not None:
+        extra["alignment"] = align.meta_dict()
     export_npz(cfg.npz_path, cfg, eyes, R_wc, extra_meta=extra)
     print(f"npz: {cfg.npz_path} (written regardless of failures)")
 
