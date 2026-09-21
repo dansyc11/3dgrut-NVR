@@ -198,8 +198,12 @@ def board_corners_3d(entry):
 
 
 def read_detections(path, stride, n_poses, boards, wanted):
-    """cam -> board -> [(seq, tag id, (4,2) px)]"""
+    """cam -> board -> [(seq, tag id, (4,2) px)]. Detections whose grid is
+    not a scene board (stray grids, gridId 0 = no grid) are discarded and
+    counted."""
     det = defaultdict(lambda: defaultdict(list))
+    stray = defaultdict(int)
+    kept = 0
     with open(path, "rb") as fh:
         for _, ch, msg in make_reader(fh).iter_messages():
             if not ch.topic.endswith("/tags"):
@@ -217,6 +221,16 @@ def read_detections(path, stride, n_poses, boards, wanted):
                     if name in boards and int(t.id) in boards[name]:
                         det[cam][name].append((seq, int(t.id),
                                                np.array(t.pointsPolygon, float)[:8].reshape(4, 2) * [w, h]))
+                        kept += 1
+                    else:
+                        stray[(cam, GRID_NAMES.get(int(t.gridId), int(t.gridId)))] += 1
+    if stray:
+        total = sum(stray.values())
+        print(f"discarded {total} stray detections not on a scene board "
+              f"(kept {kept}): " + ", ".join(
+                  f"{cam}/{g}={n}" for (cam, g), n in sorted(stray.items(), key=str)))
+    else:
+        print(f"no stray detections; kept {kept}")
     return det
 
 
