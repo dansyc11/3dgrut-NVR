@@ -77,6 +77,44 @@ def rot_matrix(deg):
     return Rz @ Ry @ Rx
 
 
+# The engine draws a board as its Quad primitive: local vertices
+# (+-1, +-1, +2.5) scaled by (sx, sy, sz), rotated, then translated
+# (mesh_io.py:183-188, transform.py model_matrix = T R S). add_primitive's
+# autoscale leaves sz = 0.5 in any scene wider than 5 units
+# (engine.py:243-249) and boards.py never writes sz, so a board spawned at
+# pos is drawn 2.5 * sz = 1.25 units away along its rotated local +z.
+QUAD_Z = 2.5
+DEFAULT_SZ = 0.5
+
+
+def board_half_extents(rows, cols, tag_cm, spacing=0.3):
+    """Half width / height of a board with its border, as boards.py:150-155."""
+    s = tag_cm / 100.0
+    return ((cols + spacing * (cols - 1) + 2 * spacing) * s / 2.0,
+            (rows + spacing * (rows - 1) + 2 * spacing) * s / 2.0)
+
+
+def board_outline(entry, specs, sz=DEFAULT_SZ):
+    """World corners (5 points, closed) of one scene-file board, where the
+    engine actually draws it: pos + R(rot) (+-sx, +-sy, QUAD_Z * sz).
+
+    Scene files size a board either by tag_cm or by hand with sx/sy (the
+    quad's half extents, what spawn_from_file writes to the transform).
+    """
+    mat = entry.get("material", "aprilgrid")
+    rows, cols = specs.get(mat, (4, 7))
+    if "sx" in entry:
+        sx, sy = float(entry["sx"]), float(entry["sy"])
+    else:
+        sx, sy = board_half_extents(rows, cols, entry.get("tag_cm", 15.0),
+                                    entry.get("spacing", 0.3))
+    z = QUAD_Z * sz
+    local = np.array([[-sx, -sy, z], [sx, -sy, z], [sx, sy, z],
+                      [-sx, sy, z], [-sx, -sy, z]])
+    return local @ rot_matrix(entry.get("rot", [0, 0, 0])).T \
+        + np.array(entry["pos"], dtype=float)
+
+
 def read_board_specs(path):
     """Parse rows and cols per material name out of boards.py BOARD_SPECS."""
     out = {}
@@ -90,7 +128,7 @@ def read_board_specs(path):
     return out
 
 
-def log_scene(scene_file, boards_py, traj_csv):
+def log_scene(scene_file, boards_py, traj_csv, sz=DEFAULT_SZ):
     specs = read_board_specs(boards_py)
     rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Y_UP, static=True)
 
@@ -99,14 +137,9 @@ def log_scene(scene_file, boards_py, traj_csv):
         for i, b in enumerate(boards):
             mat = b.get("material", "aprilgrid")
             rows, cols = specs.get(mat, (4, 7))
-            s = b.get("tag_cm", 15.0) / 100.0
-            spacing = b.get("spacing", 0.3)
-            w = cols * s + (cols + 1) * spacing * s
-            h = rows * s + (rows + 1) * spacing * s
-            local = np.array([[-w / 2, -h / 2, 0], [w / 2, -h / 2, 0],
-                              [w / 2, h / 2, 0], [-w / 2, h / 2, 0],
-                              [-w / 2, -h / 2, 0]])
-            pts = local @ rot_matrix(b.get("rot", [0, 0, 0])).T + np.array(b["pos"])
+            pts = board_outline(b, specs, sz)
+            w = float(np.linalg.norm(pts[1] - pts[0]))
+            h = float(np.linalg.norm(pts[2] - pts[1]))
             rr.log("world/boards/" + mat,
                    rr.LineStrips3D([pts], colors=[PALETTE[i % len(PALETTE)]],
                                    labels=[mat + " " + str(rows) + "x" + str(cols)]),
@@ -132,6 +165,9 @@ def main():
     p.add_argument("--traj", default="")
     p.add_argument("--scene", default="office_scene.json")
     p.add_argument("--boards-py", default="threedgrut_playground/utils/boards.py")
+    p.add_argument("--sz", type=float, default=DEFAULT_SZ,
+                   help="quad z scale the boards were rendered with "
+                        "(engine autoscale: 0.5 in scenes wider than 5 units)")
     p.add_argument("--cam", default="camd")
     p.add_argument("--stride", type=int, default=10)
     p.add_argument("--save", default="", help="write an .rrd instead of opening a window")
@@ -146,7 +182,7 @@ def main():
         if args.save:
             rr.save(args.save)
         print("scene:")
-        log_scene(args.scene, args.boards_py, args.traj)
+        log_scene(args.scene, args.boards_py, args.traj, args.sz)
 
     images = {}
     if args.images and not args.stats_only:
