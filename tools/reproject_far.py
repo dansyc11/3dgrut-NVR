@@ -17,7 +17,9 @@ projected per camera exactly as the renderer casts its rays:
 
 Residual = detected corner - projected corner [px], matched by tag id with a
 per-board cyclic corner-order shift (detector canonical order vs texture
-TL,TR,BR,BL) chosen by minimum median. The CSV row index is header.seq.
+TL,TR,BR,BL) chosen by minimum median. The projection includes the half-pixel
+convention difference between kaolin's ray centres (i + 0.5) and the
+detector's integer-centred coordinates. The CSV row index is header.seq.
 CPU only.
 """
 import argparse
@@ -129,7 +131,10 @@ def cam_view(view_d, T_D_i):
 def project(model, view_i, X):
     Xgl = X @ view_i[:3, :3].T + view_i[:3, 3]
     Xcv = Xgl * np.array([1.0, -1.0, -1.0])
-    return model.project(Xcv)
+    uv, ok = model.project(Xcv)
+    # kaolin casts pixel i's ray through i + 0.5; the detector reports
+    # integer-centred pixel coordinates, so the render is offset by half a pixel.
+    return uv - 0.5, ok
 
 
 # ----------------------------------------------------------------- boards
@@ -242,21 +247,17 @@ def main():
             proj, meas = np.array(proj), np.array(meas)
             r, shift = match_order(meas, proj)
             e = np.linalg.norm(r, axis=2)
-            bias = r.reshape(-1, 2).mean(0)
-            e_nobias = np.linalg.norm(r - bias, axis=2)
             results[(cam, name)] = dict(n=e.size, tags=len(e), frames=len(by_seq), med=np.median(e),
-                                        p95=np.percentile(e, 95), mean=e.mean(), bias=bias,
-                                        med_nobias=np.median(e_nobias), shift=shift,
+                                        p95=np.percentile(e, 95), mean=e.mean(), shift=shift,
                                         per_corner=np.median(e, axis=0), e=e)
 
     print("\ncorner-level residual |detected - projected| [px]  (shift = detector index of texture TL, reversed?)")
     hdr = (f"{'cam':5} {'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'median':>7} {'p95':>7} {'mean':>7} | "
-           f"{'bias du':>8} {'dv':>7} | {'median-bias':>11} | {'per-corner medians':>28} | shift")
+           f"{'per-corner medians':>28} | shift")
     print(hdr)
     print("-" * len(hdr))
     for (cam, name), R in results.items():
         print(f"{cam:5} {name:11} {R['frames']:6d} {R['tags']:6d} {R['n']:7d} | {R['med']:7.3f} {R['p95']:7.3f} {R['mean']:7.3f} | "
-              f"{R['bias'][0]:+8.3f} {R['bias'][1]:+7.3f} | {R['med_nobias']:11.3f} | "
               f"{' '.join(f'{v:6.3f}' for v in R['per_corner'])} | {R['shift']}")
     print("\nper camera, all boards pooled:")
     for cam in wanted:
