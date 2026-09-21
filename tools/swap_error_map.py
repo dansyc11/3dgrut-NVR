@@ -2,7 +2,7 @@
 
     python tools/swap_error_map.py [calibration_files/DP180IP-30020104.json]
         [--out swap_error_map.png] [--distances 1 3 10 100 1000]
-        [--equalize-to mid|camb|camc] [--step-deg 1.0]
+        [--equalize-to mid|camb|camc] [--step-deg 1.0] [--same-pose]
 
 For a grid of world points X (world = the reference camera's frame, CamD),
 projects X through CamB and CamC (KB4 models + device extrinsics, float64) and
@@ -15,6 +15,16 @@ every distance. The error is split into a translation term and a
 rotation+intrinsics term by re-projecting with the two camera centres moved
 onto one point (--equalize-to): Delta_eq is the rotation+intrinsics term,
 Delta - Delta_eq is the translation (parallax) term.
+
+--same-pose models a physical module swap on the mirrored mounts: both
+cameras sit at CamC's full pose (R_C, t_C) and the error is
+
+    e(X) = | pi_B(T_C^-1 X) - pi_C(T_C^-1 X) |   [px]
+
+i.e. CamB's intrinsics on CamC's mount vs what CamC produced there. Reported
+per distance as median / p95, its constant-offset component (the mean pixel
+shift over the field, dominated by the principal-point difference) and the
+residual once that offset is removed.
 
 Device-file conventions (verified against the calib_v9 vk_calibrate solve to
 0.1-0.5 mm / 0.02-0.05 deg): extrinsics are cam_i -> reference,
@@ -118,12 +128,19 @@ def direction_grid(step_deg, az_max=110.0, el_max=80.0):
     return dirs, AZ.ravel(), EL.ravel(), (len(el), len(az))
 
 
+def pair_uv(camB, camC, dirs, dist, poseB, poseC):
+    """(uvB, uvC, joint-validity mask) for X = dist * dirs, each camera at
+    its own (R, t) pose."""
+    X = dirs * dist
+    uvB, vB = camB[0].project(to_cam(poseB[0], poseB[1], X))
+    uvC, vC = camC[0].project(to_cam(poseC[0], poseC[1], X))
+    return uvB, uvC, vB & vC
+
+
 def swap_delta(camB, camC, dirs, dist, tB, tC):
     """pi_C - pi_B for X = dist * dirs, and the joint-validity mask."""
-    X = dirs * dist
-    uvB, vB = camB[0].project(to_cam(camB[1], tB, X))
-    uvC, vC = camC[0].project(to_cam(camC[1], tC, X))
-    return uvC - uvB, vB & vC
+    uvB, uvC, m = pair_uv(camB, camC, dirs, dist, (camB[1], tB), (camC[1], tC))
+    return uvC - uvB, m
 
 
 def stats(err, mask):
@@ -132,7 +149,8 @@ def stats(err, mask):
             float(e.min()), float(e.max()))
 
 
-def make_figure(out, dists, rows, field, az, el, shape, maps, eq_label):
+def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
+                note, field_label="field angle from CamD +z [deg]"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -147,12 +165,11 @@ def make_figure(out, dists, rows, field, az, el, shape, maps, eq_label):
         "legend.frameon": False,
     })
     fig, axs = plt.subplots(2, 2, figsize=(11, 8.2))
-    fig.suptitle("CamB <-> CamC swap error  |pi_C(X) - pi_B(X)|", color=INK,
-                 fontsize=12, x=0.02, ha="left")
+    fig.suptitle(title, color=INK, fontsize=12, x=0.02, ha="left")
 
     # (a) error vs distance: median solid, p95 dotted, per term
     ax = axs[0, 0]
-    for key, col in SERIES.items():
+    for key, col in series.items():
         med = [rows[d][key][0] for d in dists]
         p95 = [rows[d][key][1] for d in dists]
         ax.plot(dists, med, "-", color=col, lw=2, marker="o", ms=4)
@@ -163,8 +180,8 @@ def make_figure(out, dists, rows, field, az, el, shape, maps, eq_label):
     ax.set_ylabel("swap error [px]")
     ax.set_title("Error vs distance (solid median, dotted p95)", loc="left",
                  fontsize=10)
-    ax.legend([plt.Line2D([], [], color=c, lw=2) for c in SERIES.values()],
-              [f"{k}" for k in SERIES], loc="lower left", fontsize=8)
+    ax.legend([plt.Line2D([], [], color=c, lw=2) for c in series.values()],
+              [f"{k}" for k in series], loc="best", fontsize=8)
 
     # (b) total error vs field angle, one ordinal series per distance
     ax = axs[0, 1]
@@ -179,7 +196,7 @@ def make_figure(out, dists, rows, field, az, el, shape, maps, eq_label):
                 xs.append(0.5 * (bins[b - 1] + bins[b]))
                 ys.append(np.median(err[m][sel]))
         ax.plot(xs, ys, "-", color=col, lw=2, label=f"{d:g} m")
-    ax.set_xlabel("field angle from CamD +z [deg]")
+    ax.set_xlabel(field_label)
     ax.set_ylabel("median total swap error [px]")
     ax.set_title("Error vs field angle (2 deg bins)", loc="left", fontsize=10)
     ax.legend(title="distance", fontsize=8, title_fontsize=8)
@@ -202,9 +219,7 @@ def make_figure(out, dists, rows, field, az, el, shape, maps, eq_label):
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
         cb.set_label(unit, color=INK2)
         cb.outline.set_visible(False)
-    fig.text(0.02, 0.005, f"translations equalized to {eq_label}; white = "
-             "outside the field shared by CamB and CamC at all distances",
-             color=INK2, fontsize=8)
+    fig.text(0.02, 0.005, note, color=INK2, fontsize=8)
     fig.tight_layout(rect=(0, 0.02, 1, 0.96))
     fig.savefig(out, dpi=140)
     print(f"wrote {out}")
@@ -223,6 +238,9 @@ def main():
                     default="mid",
                     help="where both camera centres go for the "
                          "rotation+intrinsics term (default midpoint)")
+    ap.add_argument("--same-pose", action="store_true",
+                    help="module swap: both cameras at CamC's pose, error = "
+                         "|pi_B - pi_C| from CamB's intrinsics on CamC's mount")
     ap.add_argument("--out", default="swap_error_map.png")
     ap.add_argument("--no-plot", action="store_true")
     args = ap.parse_args()
@@ -256,6 +274,10 @@ def main():
     dirs, az, el, shape = direction_grid(args.step_deg)
     field_angle = np.degrees(np.arccos(np.clip(dirs[:, 2], -1, 1)))
     dists = list(args.distances)
+
+    if args.same_pose:
+        same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists)
+        return
 
     # One common mask: directions inside both images at EVERY distance, so
     # the per-distance statistics compare the same set of rays.
@@ -331,7 +353,111 @@ def main():
              grid_far.reshape(shape), "px"),
             (f"Translation term at {dists[0]:g} m", grid_tr.reshape(shape), "px")]
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    make_figure(args.out, dists, rows, field, az, el, shape, maps, eq_label)
+    make_figure(args.out, dists, rows, SERIES, field, az, el, shape, maps,
+                "CamB <-> CamC swap error  |pi_C(X) - pi_B(X)|",
+                f"translations equalized to {eq_label}; white = outside the "
+                "field shared by CamB and CamC at all distances")
+
+
+def same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists):
+    """Both cameras at CamC's pose: the error is CamB's intrinsics on CamC's
+    mount, |pi_B(T_C^-1 X) - pi_C(T_C^-1 X)|, direction-only by construction
+    (the two centres coincide), so it does not fall off with distance."""
+    pose = (camC[1], camC[2])
+    kB, kC = camB[0], camC[0]
+    # field angle from CamC's own optical axis, the natural coordinate here
+    field_angle = np.degrees(np.arccos(np.clip(dirs @ camC[1][:, 2], -1, 1)))
+    print(f"\n--same-pose: both cameras at CamC's pose, error = |pi_B - pi_C|")
+    print(f"  intrinsic deltas B-C: cx {kB.cx - kC.cx:+.3f} px, cy {kB.cy - kC.cy:+.3f} px, "
+          f"fx ratio {kB.fx / kC.fx:.5f}, fy ratio {kB.fy / kC.fy:.5f}, "
+          f"k1..k4 {kB.k1 - kC.k1:+.5f} {kB.k2 - kC.k2:+.5f} "
+          f"{kB.k3 - kC.k3:+.5f} {kB.k4 - kC.k4:+.5f}")
+
+    deltas, masks = {}, {}
+    common = np.ones(len(dirs), dtype=bool)
+    for d in dists:
+        uvB, uvC, m = pair_uv(camB, camC, dirs, d, pose, pose)
+        deltas[d] = uvB - uvC
+        masks[d] = m
+        common &= m
+    n = int(common.sum())
+    print(f"shared field (both models valid from CamC's mount): {n} directions "
+          f"of {len(dirs)} ({args.step_deg:g} deg grid), az {az[common].min():+.0f}.."
+          f"{az[common].max():+.0f} el {el[common].min():+.0f}..{el[common].max():+.0f} deg "
+          f"in the CamD frame, up to {field_angle[common].max():.1f} deg off CamC's axis")
+    for d in dists:
+        extra = int((masks[d] & ~common).sum())
+        if extra:
+            print(f"  ({extra} more directions are jointly visible at {d:g} m only)")
+
+    print(f"\nmodule-swap error |pi_B - pi_C| [px] on CamC's mount")
+    hdr = (f"{'dist [m]':>9} | {'total med':>9} {'p95':>8} | "
+           f"{'const offset du':>15} {'dv':>8} {'|off|':>7} | {'residual med':>12} {'p95':>8}")
+    print(hdr)
+    print("-" * len(hdr))
+    rows, field = {}, {}
+    for d in dists:
+        dl = deltas[d]
+        off = dl[common].mean(axis=0)
+        e_tot = np.linalg.norm(dl, axis=1)
+        e_res = np.linalg.norm(dl - off, axis=1)
+        e_off = np.full(len(dl), np.linalg.norm(off))
+        rows[d] = {"intrinsics": stats(e_tot, common),
+                   "constant offset": stats(e_off, common),
+                   "offset removed": stats(e_res, common)}
+        field[d] = (field_angle, e_tot, common)
+        r = rows[d]
+        print(f"{d:9g} | {r['intrinsics'][0]:9.3f} {r['intrinsics'][1]:8.3f} | "
+              f"{off[0]:15.3f} {off[1]:8.3f} {np.linalg.norm(off):7.3f} | "
+              f"{r['offset removed'][0]:12.3f} {r['offset removed'][1]:8.3f}")
+
+    # Direction-only limit (X at infinity): the centres coincide anyway, so
+    # this differs from the table only through the grid's parallax to CamC.
+    uvB, uvC, _ = pair_uv(camB, camC, dirs, 1.0, (camC[1], np.zeros(3)),
+                          (camC[1], np.zeros(3)))
+    dl_inf = uvB - uvC
+    off_inf = dl_inf[common].mean(axis=0)
+    e_inf = np.linalg.norm(dl_inf, axis=1)
+    e_res_inf = np.linalg.norm(dl_inf - off_inf, axis=1)
+    med, p95, lo, hi = stats(e_inf, common)
+    rmed, rp95, rlo, rhi = stats(e_res_inf, common)
+    print(f"\nfar-distance asymptote (X at infinity): median {med:.3f} px, p95 {p95:.3f}, "
+          f"min {lo:.3f}, max {hi:.3f}")
+    print(f"  constant offset (mean over the field): du {off_inf[0]:+.3f} px, "
+          f"dv {off_inf[1]:+.3f} px, |offset| {np.linalg.norm(off_inf):.3f} px "
+          f"(principal-point delta alone: {kB.cx - kC.cx:+.3f}, {kB.cy - kC.cy:+.3f})")
+    print(f"  after removing the offset: median {rmed:.3f} px, p95 {rp95:.3f}, "
+          f"min {rlo:.3f}, max {rhi:.3f}  (focal + distortion difference)")
+    axis = np.argmin(np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1)
+                     + np.where(common, 0, 1e9))
+    print(f"  on CamC's optical axis (az {az[axis]:+.0f}, el {el[axis]:+.0f}): "
+          f"du {dl_inf[axis][0]:+.3f} dv {dl_inf[axis][1]:+.3f} px")
+    rad = np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1)
+    for lim in (100, 200, 300, 400, 500, 600):
+        sel = common & (rad <= lim)
+        if sel.any():
+            print(f"  within {lim:3d} px of CamC's principal point: "
+                  f"median {np.median(e_inf[sel]):7.3f} px, p95 {np.percentile(e_inf[sel], 95):7.3f}, "
+                  f"residual median {np.median(e_res_inf[sel]):7.3f}")
+
+    if args.no_plot:
+        return
+    grid_tot = np.full(len(dirs), np.nan)
+    grid_tot[common] = e_inf[common]
+    grid_res = np.full(len(dirs), np.nan)
+    grid_res[common] = e_res_inf[common]
+    maps = [("Module-swap error |pi_B - pi_C| (X at infinity)",
+             grid_tot.reshape(shape), "px"),
+            ("After removing the constant offset", grid_res.reshape(shape), "px")]
+    series = {"intrinsics": SERIES["total"],
+              "constant offset": SERIES["translation"],
+              "offset removed": SERIES["rot+intr"]}
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    make_figure(args.out, dists, rows, series, field, az, el, shape, maps,
+                "CamB module on CamC's mount  |pi_B(X) - pi_C(X)|",
+                "both cameras at CamC's pose; white = outside the field both "
+                "models see from that mount",
+                field_label="field angle from CamC's optical axis [deg]")
 
 
 if __name__ == "__main__":
