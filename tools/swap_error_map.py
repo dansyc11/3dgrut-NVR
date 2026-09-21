@@ -1,8 +1,14 @@
-"""CamB <-> CamC swap error map from a device calibration file. CPU only.
+"""Mirrored-pair swap error map from a device calibration file. CPU only.
 
     python tools/swap_error_map.py [calibration_files/DP180IP-30020104.json]
         [--out swap_error_map.png] [--distances 1 3 10 100 1000]
         [--equalize-to mid|camb|camc] [--step-deg 1.0] [--same-pose]
+
+The swap pair is found from the extrinsics: the unique same-resolution KB4
+pair whose optical axes are 40-80 deg apart (the mirrored front mounts;
+CamB-CamC 60.5 deg on DP180IP, camb-camc 55.1 deg on NV180V2 - the
+resolution test is what excludes NV180V2's camb-camd at 75.6 deg). If the
+rule does not give exactly one pair, rig indices 1,2 are used as before.
 
 For a grid of world points X (world = the reference camera's frame, CamD),
 projects X through CamB and CamC (KB4 models + device extrinsics, float64) and
@@ -26,13 +32,25 @@ per distance as median / p95, its constant-offset component (the mean pixel
 shift over the field, dominated by the principal-point difference) and the
 residual once that offset is removed.
 
-Device-file conventions (verified against the calib_v9 vk_calibrate solve to
-0.1-0.5 mm / 0.02-0.05 deg): extrinsics are cam_i -> reference,
-X_ref = R_i X_i + t_i, translation in CENTIMETRES; the reference camera has an
-empty rotationMatrix (identity) and zero translation. KB4 (cameraType 1):
-fx fy cx cy from intrinsicMatrix, k1..k4 = distortionCoeff[0:4],
+Device-file conventions, DP180 format ("cameraData"; verified against the
+calib_v9 vk_calibrate solve to 0.1-0.5 mm / 0.02-0.05 deg): extrinsics are
+cam_i -> reference, X_ref = R_i X_i + t_i, translation in CENTIMETRES; the
+reference camera has an empty rotationMatrix (identity) and zero translation.
+KB4 (cameraType 1): fx fy cx cy from intrinsicMatrix,
+k1..k4 = distortionCoeff[0:4],
 d(theta) = theta (1 + k1 th^2 + k2 th^4 + k3 th^6 + k4 th^8) - the same
 polynomial kaolin_future/fisheye.py:279 inverts for the render.
+
+NV180 format ("calibration_data" wrapper, e.g. NV180V2 80.120.0101): two
+blocks, calibration_data_kb4 (all cameras KB4) and calibration_data_ds (the
+DS-slot camera, index 0, as Double Sphere). T_imu_cam is cam_i -> reference
+as px..pz METRES + qx qy qz qw, but the reference DIFFERS per block: the kb4
+block is IMU-referenced (T_imu_cam[0] non-trivial) while the ds block is
+camera-gauge (T_imu_cam[0] identity, reference = cam 0). Verified: rebasing
+the kb4 block onto cam 0 reproduces the ds block to 0.007 deg / 0.11 mm, and
+|t_i - t_j| matches the stored baselines to <1 um in both blocks. This tool
+reads the kb4 block (the only one with KB4 intrinsics for every camera) and
+rebases it onto cam 0 so the world is a camera frame, as in the DP180 path.
 """
 import argparse
 import json
@@ -90,12 +108,48 @@ class KB4:
         return np.stack([u, v], axis=1), valid
 
 
+def quat_to_R(qx, qy, qz, qw):
+    q = np.array([qw, qx, qy, qz], dtype=np.float64)
+    q /= np.linalg.norm(q)
+    w, x, y, z = q
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+    ])
+
+
 def load_device(path):
-    """-> dict rig_index -> (KB4|None, R (3,3), t (3,) metres, cameraType)."""
+    """-> (serial, dict rig_index -> (KB4|None, R (3,3), t (3,) metres,
+    type label), dict rig_index -> camera name). Extrinsics are cam -> world
+    with the world a camera frame (DP180: the reference camera; NV180: cam 0,
+    the kb4 block rebased from the IMU onto it)."""
     with open(path) as fh:
         data = json.load(fh)
-    cams = {}
-    for idx, c in data["cameraData"]:
+    cams, names = {}, {}
+
+    if "calibration_data" in data:              # NV180 format
+        wrap = data["calibration_data"]
+        block = wrap["calibration_data_kb4"]
+        for i, cname in enumerate(block["cam_names"]):
+            names[i] = cname.split("/")[-1]
+            T = block["T_imu_cam"][i]
+            R = quat_to_R(T["qx"], T["qy"], T["qz"], T["qw"])
+            t = np.array([T["px"], T["py"], T["pz"]], dtype=np.float64)
+            k = block["intrinsics"][i]
+            w, h = block["resolution"][i]
+            model = None
+            if k["camera_type"] == "kb4":
+                v = k["intrinsics"]
+                model = KB4(v["fx"], v["fy"], v["cx"], v["cy"],
+                            (v["k1"], v["k2"], v["k3"], v["k4"]), w, h)
+            cams[i] = (model, R, t, k["camera_type"].upper())
+        R0, t0 = cams[0][1], cams[0][2]         # rebase IMU -> cam 0 gauge
+        cams = {i: (m, R0.T @ R, R0.T @ (t - t0), ct)
+                for i, (m, R, t, ct) in cams.items()}
+        return wrap.get("product_id", block.get("serial_number", "?")), cams, names
+
+    for idx, c in data["cameraData"]:           # DP180 format
         e = c["extrinsics"]
         rot = e.get("rotationMatrix") or []
         R = np.array(rot, dtype=np.float64) if len(rot) else np.eye(3)
@@ -106,8 +160,35 @@ def load_device(path):
         if c["cameraType"] == 1:
             model = KB4(K[0][0], K[1][1], K[0][2], K[1][2],
                         c["distortionCoeff"][0:4], c["width"], c["height"])
-        cams[int(idx)] = (model, R, t, c["cameraType"])
-    return data.get("deviceName", "?"), cams
+        cams[int(idx)] = (model, R, t,
+                          {0: "DS", 1: "KB4"}.get(c["cameraType"],
+                                                  f"type{c['cameraType']}"))
+        names[int(idx)] = CAM_NAMES[int(idx)]
+    return data.get("deviceName", "?"), cams, names
+
+
+def find_mirror_pair(cams):
+    """The unique same-resolution KB4 pair with optical axes 40-80 deg apart
+    (a module swap needs interchangeable sensors), else (1, 2)."""
+    kb4 = [i for i in sorted(cams) if cams[i][0] is not None]
+    pairs = []
+    for a in kb4:
+        for b in kb4:
+            if a < b:
+                ma, mb = cams[a][0], cams[b][0]
+                if (ma.width, ma.height) != (mb.width, mb.height):
+                    continue
+                ang = np.degrees(np.arccos(np.clip(
+                    cams[a][1][:, 2] @ cams[b][1][:, 2], -1, 1)))
+                if 40.0 <= ang <= 80.0:
+                    pairs.append((a, b, ang))
+    if len(pairs) == 1:
+        return pairs[0]
+    print(f"  (mirror-pair rule matched {len(pairs)} pairs, "
+          f"falling back to rig indices 1,2)")
+    ang = np.degrees(np.arccos(np.clip(
+        cams[1][1][:, 2] @ cams[2][1][:, 2], -1, 1)))
+    return 1, 2, ang
 
 
 def to_cam(R, t, Xw):
@@ -116,7 +197,8 @@ def to_cam(R, t, Xw):
 
 
 def direction_grid(step_deg, az_max=110.0, el_max=80.0):
-    """Unit directions in the world (CamD) frame over an az/el grid.
+    """Unit directions in the world frame (a camera frame, see load_device)
+    over an az/el grid.
     az about the world y axis (positive towards +x, right), el about x
     (positive towards -y, up). Returns dirs (N,3), az (N,), el (N,) in deg."""
     az = np.arange(-az_max, az_max + 1e-9, step_deg)
@@ -150,7 +232,7 @@ def stats(err, mask):
 
 
 def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
-                note, field_label="field angle from CamD +z [deg]"):
+                note, field_label="field angle from world +z [deg]"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -176,7 +258,7 @@ def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
         ax.plot(dists, p95, ":", color=col, lw=1.6)
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("distance from CamD [m]")
+    ax.set_xlabel("distance from the world origin [m]")
     ax.set_ylabel("swap error [px]")
     ax.set_title("Error vs distance (solid median, dotted p95)", loc="left",
                  fontsize=10)
@@ -213,7 +295,7 @@ def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
         ax.set_xlim(az_ok.min() - pad, az_ok.max() + pad)
         ax.set_ylim(el_ok.min() - pad, el_ok.max() + pad)
         ax.grid(False)
-        ax.set_xlabel("azimuth in CamD frame [deg]  (+ = right)")
+        ax.set_xlabel("azimuth in the world frame [deg]  (+ = right)")
         ax.set_ylabel("elevation [deg]  (+ = up)")
         ax.set_title(title, loc="left", fontsize=10)
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
@@ -245,19 +327,22 @@ def main():
     ap.add_argument("--no-plot", action="store_true")
     args = ap.parse_args()
 
-    serial, cams = load_device(args.calib)
+    serial, cams, names = load_device(args.calib)
     print(f"device {serial}  ({args.calib})")
     for i in sorted(cams):
-        m, R, t, ct = cams[i]
-        kind = "KB4" if ct == 1 else ("DS" if ct == 0 else f"type{ct}")
+        m, R, t, kind = cams[i]
         fwd = R[:, 2]
-        print(f"  {CAM_NAMES[i]} idx {i} {kind:3s} centre {t * 100} cm  "
+        print(f"  {names[i]} idx {i} {kind:3s} centre {t * 100} cm  "
               f"forward {fwd}  yaw {np.degrees(np.arctan2(fwd[0], fwd[2])):+.2f} deg"
               + (f"  theta_max {np.degrees(m.theta_max):.1f} deg" if m else ""))
-    camB, camC = cams[1], cams[2]
-    for name, cam in (("CamB", camB), ("CamC", camC)):
+    iB, iC, pair_ang = find_mirror_pair(cams)
+    nameB, nameC = names[iB], names[iC]
+    print(f"  mirrored pair: {nameB} <-> {nameC} "
+          f"(optical axes {pair_ang:.2f} deg apart)")
+    camB, camC = cams[iB], cams[iC]
+    for name, cam in ((nameB, camB), (nameC, camC)):
         if cam[0] is None:
-            raise SystemExit(f"{name} is not KB4 (cameraType {cam[3]})")
+            raise SystemExit(f"{name} is not KB4 ({cam[3]})")
         print(f"  {name} fx {cam[0].fx:.3f} fy {cam[0].fy:.3f} cx {cam[0].cx:.3f} "
               f"cy {cam[0].cy:.3f} k {cam[0].k1:+.5f} {cam[0].k2:+.5f} "
               f"{cam[0].k3:+.5f} {cam[0].k4:+.5f}  {cam[0].width}x{cam[0].height}")
@@ -265,18 +350,21 @@ def main():
     baseline = np.linalg.norm(tC - tB)
     rel = camB[1].T @ camC[1]
     ang_bc = np.degrees(np.arccos(np.clip((np.trace(rel) - 1) / 2, -1, 1)))
-    print(f"  baseline B-C {baseline * 100:.3f} cm, optical axes {ang_bc:.2f} deg apart")
+    print(f"  baseline {nameB}-{nameC} {baseline * 100:.3f} cm, "
+          f"full relative rotation {ang_bc:.2f} deg")
 
     eq = {"mid": 0.5 * (tB + tC), "camb": tB, "camc": tC}[args.equalize_to]
-    eq_label = {"mid": "the B-C midpoint", "camb": "CamB's centre",
-                "camc": "CamC's centre"}[args.equalize_to]
+    eq_label = {"mid": f"the {nameB}-{nameC} midpoint",
+                "camb": f"{nameB}'s centre",
+                "camc": f"{nameC}'s centre"}[args.equalize_to]
 
     dirs, az, el, shape = direction_grid(args.step_deg)
     field_angle = np.degrees(np.arccos(np.clip(dirs[:, 2], -1, 1)))
     dists = list(args.distances)
 
     if args.same_pose:
-        same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists)
+        same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
+                       field_angle, dists)
         return
 
     # One common mask: directions inside both images at EVERY distance, so
@@ -354,21 +442,24 @@ def main():
             (f"Translation term at {dists[0]:g} m", grid_tr.reshape(shape), "px")]
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     make_figure(args.out, dists, rows, SERIES, field, az, el, shape, maps,
-                "CamB <-> CamC swap error  |pi_C(X) - pi_B(X)|",
+                f"{nameB} <-> {nameC} swap error  |pi_C(X) - pi_B(X)|",
                 f"translations equalized to {eq_label}; white = outside the "
-                "field shared by CamB and CamC at all distances")
+                f"field shared by {nameB} and {nameC} at all distances")
 
 
-def same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists):
-    """Both cameras at CamC's pose: the error is CamB's intrinsics on CamC's
-    mount, |pi_B(T_C^-1 X) - pi_C(T_C^-1 X)|, direction-only by construction
-    (the two centres coincide), so it does not fall off with distance."""
+def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
+                   field_angle, dists):
+    """Both cameras at the C-side pose: the error is the B module's
+    intrinsics on the C mount, |pi_B(T_C^-1 X) - pi_C(T_C^-1 X)|,
+    direction-only by construction (the two centres coincide), so it does
+    not fall off with distance."""
     pose = (camC[1], camC[2])
     kB, kC = camB[0], camC[0]
-    # field angle from CamC's own optical axis, the natural coordinate here
+    # field angle from the C mount's own optical axis, the natural coordinate
     field_angle = np.degrees(np.arccos(np.clip(dirs @ camC[1][:, 2], -1, 1)))
-    print(f"\n--same-pose: both cameras at CamC's pose, error = |pi_B - pi_C|")
-    print(f"  intrinsic deltas B-C: cx {kB.cx - kC.cx:+.3f} px, cy {kB.cy - kC.cy:+.3f} px, "
+    print(f"\n--same-pose: both cameras at {nameC}'s pose, error = |pi_B - pi_C|")
+    print(f"  intrinsic deltas {nameB}-{nameC}: cx {kB.cx - kC.cx:+.3f} px, "
+          f"cy {kB.cy - kC.cy:+.3f} px, "
           f"fx ratio {kB.fx / kC.fx:.5f}, fy ratio {kB.fy / kC.fy:.5f}, "
           f"k1..k4 {kB.k1 - kC.k1:+.5f} {kB.k2 - kC.k2:+.5f} "
           f"{kB.k3 - kC.k3:+.5f} {kB.k4 - kC.k4:+.5f}")
@@ -381,16 +472,16 @@ def same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists):
         masks[d] = m
         common &= m
     n = int(common.sum())
-    print(f"shared field (both models valid from CamC's mount): {n} directions "
+    print(f"shared field (both models valid from {nameC}'s mount): {n} directions "
           f"of {len(dirs)} ({args.step_deg:g} deg grid), az {az[common].min():+.0f}.."
           f"{az[common].max():+.0f} el {el[common].min():+.0f}..{el[common].max():+.0f} deg "
-          f"in the CamD frame, up to {field_angle[common].max():.1f} deg off CamC's axis")
+          f"in the world frame, up to {field_angle[common].max():.1f} deg off {nameC}'s axis")
     for d in dists:
         extra = int((masks[d] & ~common).sum())
         if extra:
             print(f"  ({extra} more directions are jointly visible at {d:g} m only)")
 
-    print(f"\nmodule-swap error |pi_B - pi_C| [px] on CamC's mount")
+    print(f"\nmodule-swap error |pi_B - pi_C| [px] on {nameC}'s mount")
     hdr = (f"{'dist [m]':>9} | {'total med':>9} {'p95':>8} | "
            f"{'const offset du':>15} {'dv':>8} {'|off|':>7} | {'residual med':>12} {'p95':>8}")
     print(hdr)
@@ -430,13 +521,13 @@ def same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists):
           f"min {rlo:.3f}, max {rhi:.3f}  (focal + distortion difference)")
     axis = np.argmin(np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1)
                      + np.where(common, 0, 1e9))
-    print(f"  on CamC's optical axis (az {az[axis]:+.0f}, el {el[axis]:+.0f}): "
+    print(f"  on {nameC}'s optical axis (az {az[axis]:+.0f}, el {el[axis]:+.0f}): "
           f"du {dl_inf[axis][0]:+.3f} dv {dl_inf[axis][1]:+.3f} px")
     rad = np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1)
     for lim in (100, 200, 300, 400, 500, 600):
         sel = common & (rad <= lim)
         if sel.any():
-            print(f"  within {lim:3d} px of CamC's principal point: "
+            print(f"  within {lim:3d} px of {nameC}'s principal point: "
                   f"median {np.median(e_inf[sel]):7.3f} px, p95 {np.percentile(e_inf[sel], 95):7.3f}, "
                   f"residual median {np.median(e_res_inf[sel]):7.3f}")
 
@@ -454,10 +545,10 @@ def same_pose_mode(args, camB, camC, dirs, az, el, shape, field_angle, dists):
               "offset removed": SERIES["rot+intr"]}
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     make_figure(args.out, dists, rows, series, field, az, el, shape, maps,
-                "CamB module on CamC's mount  |pi_B(X) - pi_C(X)|",
-                "both cameras at CamC's pose; white = outside the field both "
-                "models see from that mount",
-                field_label="field angle from CamC's optical axis [deg]")
+                f"{nameB} module on {nameC}'s mount  |pi_B(X) - pi_C(X)|",
+                f"both cameras at {nameC}'s pose; white = outside the field "
+                "both models see from that mount",
+                field_label=f"field angle from {nameC}'s optical axis [deg]")
 
 
 if __name__ == "__main__":
