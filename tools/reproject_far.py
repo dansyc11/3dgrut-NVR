@@ -3,6 +3,7 @@
     python tools/reproject_far.py [--tags office_v9_tags.mcap] [--traj ...csv]
         [--scene office_scene_v9.json] [--calib calibration_files/....json]
         [--stride 1] [--cams cama,camb,camc,camd]
+        [--swap camb,camc [--remove-rotation] [--remove-translation] [--plot out.png]]
 
 Every tag's four black-square corners are placed in 3D from the texture
 layout (boards.py / create_aprilgrid.py: square 800 px, gap 240 px, padding
@@ -20,6 +21,16 @@ per-board cyclic corner-order shift (detector canonical order vs texture
 TL,TR,BR,BL) chosen by minimum median. The projection includes the half-pixel
 convention difference between kaolin's ray centres (i + 0.5) and the
 detector's integer-centred coordinates. The CSV row index is header.seq.
+
+--swap camX,camY projects each of the two cameras' detections through the
+OTHER camera's calibration entry (intrinsics and extrinsics), i.e. the error
+a mislabelled calibration would leave on real detections. --remove-rotation
+/ --remove-translation keep the camera's own extrinsic rotation / translation
+(only the rest is swapped); with both, only the intrinsics are swapped, the
+counterpart of swap_error_map.py --same-pose. Swap runs report the constant
+offset (mean residual vector) and the residual after removing it, and with
+--plot overlay the measured error vs field angle on the model prediction at
+the detected corners and on the uniform-field --same-pose prediction.
 CPU only.
 """
 import argparse
@@ -128,13 +139,36 @@ def cam_view(view_d, T_D_i):
     return F @ np.linalg.inv(cami_to_world) @ F
 
 
-def project(model, view_i, X):
+def cam_points(view_i, X):
+    """World points -> OpenCV camera frame of the camera with view_i."""
     Xgl = X @ view_i[:3, :3].T + view_i[:3, 3]
-    Xcv = Xgl * np.array([1.0, -1.0, -1.0])
-    uv, ok = model.project(Xcv)
+    return Xgl * np.array([1.0, -1.0, -1.0])
+
+
+def project(model, view_i, X):
+    uv, ok = model.project(cam_points(view_i, X))
     # kaolin casts pixel i's ray through i + 0.5; the detector reports
     # integer-centred pixel coordinates, so the render is offset by half a pixel.
     return uv - 0.5, ok
+
+
+def field_angle_deg(Xcv):
+    return np.degrees(np.arctan2(np.hypot(Xcv[:, 0], Xcv[:, 1]), Xcv[:, 2]))
+
+
+def uniform_swap_prediction(model_own, model_use, step_deg=1.0):
+    """--same-pose prediction on a uniform direction grid in the camera's own
+    frame: pi_own - pi_use of the same ray, both models at one pose.
+    Returns (field angle deg, error vector (N,2)) over the jointly valid field."""
+    az = np.radians(np.arange(-110, 110 + 1e-9, step_deg))
+    el = np.radians(np.arange(-80, 80 + 1e-9, step_deg))
+    A, E = np.meshgrid(az, el, indexing="xy")
+    a, e = A.ravel(), E.ravel()
+    dirs = np.stack([np.cos(e) * np.sin(a), -np.sin(e), np.cos(e) * np.cos(a)], 1)
+    uo, ok_o = model_own.project(dirs)
+    uu, ok_u = model_use.project(dirs)
+    m = ok_o & ok_u
+    return field_angle_deg(dirs[m]), (uo - uu)[m]
 
 
 # ----------------------------------------------------------------- boards
@@ -210,10 +244,33 @@ def main():
     ap.add_argument("--calib", default=os.path.join(REPO, "calibration_files/DP180IP-30020104.json"))
     ap.add_argument("--stride", type=int, default=1, help="use every Nth frame")
     ap.add_argument("--cams", default="cama,camb,camc,camd")
+    ap.add_argument("--swap", default="",
+                    help="camX,camY: project each one's detections through the other's calibration entry")
+    ap.add_argument("--remove-rotation", action="store_true",
+                    help="with --swap: keep each camera's own extrinsic rotation")
+    ap.add_argument("--remove-translation", action="store_true",
+                    help="with --swap: keep each camera's own extrinsic translation")
+    ap.add_argument("--plot", default="", help="with --swap: error-vs-field-angle overlay PNG")
     args = ap.parse_args()
     wanted = [c.strip() for c in args.cams.split(",")]
 
     cams = load_cams(args.calib)
+    used = dict(cams)
+    swapped = []
+    if args.swap:
+        a, b = [CAM_NAMES.index(c.strip()) for c in args.swap.split(",")]
+        for me, other in ((a, b), (b, a)):
+            model_o, T_o = cams[other]
+            T = T_o.copy()
+            if args.remove_rotation:
+                T[:3, :3] = cams[me][1][:3, :3]
+            if args.remove_translation:
+                T[:3, 3] = cams[me][1][:3, 3]
+            used[me] = (model_o, T)
+        swapped = [CAM_NAMES[a], CAM_NAMES[b]]
+        print(f"--swap: {swapped[0]} <-> {swapped[1]} calibration entries"
+              + (" (own rotation kept)" if args.remove_rotation else "")
+              + (" (own translation kept)" if args.remove_translation else ""))
     rows = [[float(r[k]) for k in ("x", "y", "z", "roll", "pitch", "yaw")]
             for r in csv.DictReader(open(args.traj))]
     boards = {b["material"]: board_corners_3d(b) for b in json.load(open(args.scene))["boards"]
@@ -227,6 +284,8 @@ def main():
         if cam not in wanted:
             continue
         model, T_D_i = cams[ci]
+        model_u, T_u = used[ci]
+        is_swap = cam in swapped
         for name, corners3d in boards.items():
             items = det[cam].get(name, [])
             if not items:
@@ -234,22 +293,41 @@ def main():
             by_seq = defaultdict(list)
             for seq, tid, px in items:
                 by_seq[seq].append((tid, px))
-            proj, meas = [], []
+            proj, proj_u, meas, ang = [], [], [], []
             for seq, lst in by_seq.items():
-                view_i = cam_view(camd_view(rows[seq]), T_D_i)
+                view_d = camd_view(rows[seq])
+                view_i = cam_view(view_d, T_D_i)
                 X = np.vstack([corners3d[tid] for tid, _ in lst])
                 uv, ok = project(model, view_i, X)
+                th = field_angle_deg(cam_points(view_i, X)).reshape(-1, 4)
+                if is_swap:
+                    uv_u, ok_u = project(model_u, cam_view(view_d, T_u), X)
+                    ok = ok & ok_u
+                    uv_u = uv_u.reshape(-1, 4, 2)
                 uv, ok = uv.reshape(-1, 4, 2), ok.reshape(-1, 4).all(1)
                 for k, (tid, px) in enumerate(lst):
                     if ok[k]:
                         proj.append(uv[k])
                         meas.append(px)
-            proj, meas = np.array(proj), np.array(meas)
-            r, shift = match_order(meas, proj)
-            e = np.linalg.norm(r, axis=2)
-            results[(cam, name)] = dict(n=e.size, tags=len(e), frames=len(by_seq), med=np.median(e),
-                                        p95=np.percentile(e, 95), mean=e.mean(), shift=shift,
-                                        per_corner=np.median(e, axis=0), e=e)
+                        ang.append(th[k])
+                        if is_swap:
+                            proj_u.append(uv_u[k])
+            proj, meas, ang = np.array(proj), np.array(meas), np.array(ang)
+            # the corner order is decided on the true projection (the floor)
+            r_floor, shift = match_order(meas, proj)
+            e = np.linalg.norm(r_floor, axis=2)
+            R = dict(n=e.size, tags=len(e), frames=len(by_seq), med=np.median(e),
+                     p95=np.percentile(e, 95), mean=e.mean(), shift=shift,
+                     per_corner=np.median(e, axis=0), e=e, ang=ang)
+            if is_swap:
+                s_, rev = shift
+                order = np.roll(np.arange(4)[::rev], s_)
+                proj_u = np.array(proj_u)[:, order]
+                r = meas - proj_u                     # measured swap residual
+                expct = proj[:, order] - proj_u       # model prediction at these corners
+                R.update(r=r, expct=expct, e_swap=np.linalg.norm(r, axis=2),
+                         med_swap=np.median(np.linalg.norm(r, axis=2)))
+            results[(cam, name)] = R
 
     print("\ncorner-level residual |detected - projected| [px]  (shift = detector index of texture TL, reversed?)")
     hdr = (f"{'cam':5} {'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'median':>7} {'p95':>7} {'mean':>7} | "
@@ -259,12 +337,110 @@ def main():
     for (cam, name), R in results.items():
         print(f"{cam:5} {name:11} {R['frames']:6d} {R['tags']:6d} {R['n']:7d} | {R['med']:7.3f} {R['p95']:7.3f} {R['mean']:7.3f} | "
               f"{' '.join(f'{v:6.3f}' for v in R['per_corner'])} | {R['shift']}")
-    print("\nper camera, all boards pooled:")
+    print("\nper camera, all boards pooled (true calibration = the floor):")
     for cam in wanted:
         es = [R["e"] for (c, _), R in results.items() if c == cam]
         if es:
             e = np.concatenate([x.ravel() for x in es])
             print(f"  {cam}: {e.size} corners  median {np.median(e):.3f}  p95 {np.percentile(e, 95):.3f}")
+
+    if not swapped:
+        return
+    report_swap(results, swapped, cams, used, args)
+
+
+def _stats(v):
+    e = np.linalg.norm(v, axis=-1).ravel()
+    return np.median(e), np.percentile(e, 95)
+
+
+def _binned(ang, err, bins):
+    xs, ys = [], []
+    idx = np.digitize(ang, bins)
+    for b in range(1, len(bins)):
+        sel = idx == b
+        if sel.sum() >= 8:
+            xs.append(0.5 * (bins[b - 1] + bins[b]))
+            ys.append(np.median(err[sel]))
+    return np.array(xs), np.array(ys)
+
+
+def report_swap(results, swapped, cams, used, args):
+    """Swap residual per board and per camera: constant offset (mean residual
+    vector), residual after removing it, the model prediction at the same
+    corners, and the uniform-field --same-pose prediction."""
+    print(f"\nswap residual |detected - projected through the swapped entry| [px]")
+    hdr = (f"{'cam':5} {'board':11} {'corners':>7} | {'median':>8} {'p95':>8} | {'offset du':>9} {'dv':>8} "
+           f"| {'after offset':>12} {'p95':>8} | {'model at corners':>16} {'p95':>8}")
+    print(hdr)
+    print("-" * len(hdr))
+    pooled = {}
+    for cam in swapped:
+        rs = [(R["r"], R["expct"], R["ang"], name) for (c, name), R in results.items() if c == cam and "r" in R]
+        if not rs:
+            continue          # the other half of the pair was not in --cams
+        for r, ex, ang, name in rs:
+            off = r.reshape(-1, 2).mean(0)
+            m, p = _stats(r)
+            m2, p2 = _stats(r - off)
+            m3, p3 = _stats(ex - ex.reshape(-1, 2).mean(0))
+            print(f"{cam:5} {name:11} {r.shape[0] * 4:7d} | {m:8.3f} {p:8.3f} | {off[0]:+9.3f} {off[1]:+8.3f} "
+                  f"| {m2:12.3f} {p2:8.3f} | {m3:16.3f} {p3:8.3f}")
+        r = np.concatenate([x[0] for x in rs]).reshape(-1, 2)
+        ex = np.concatenate([x[1] for x in rs]).reshape(-1, 2)
+        ang = np.concatenate([x[2] for x in rs]).ravel()
+        off, off_ex = r.mean(0), ex.mean(0)
+        m, p = _stats(r)
+        m2, p2 = _stats(r - off)
+        m3, p3 = _stats(ex - off_ex)
+        ci = CAM_NAMES.index(cam)
+        ang_u, d_u = uniform_swap_prediction(cams[ci][0], used[ci][0])
+        off_u = d_u.mean(0)
+        m4, p4 = _stats(d_u - off_u)
+        print(f"{cam:5} {'ALL':11} {len(r):7d} | {m:8.3f} {p:8.3f} | {off[0]:+9.3f} {off[1]:+8.3f} "
+              f"| {m2:12.3f} {p2:8.3f} | {m3:16.3f} {p3:8.3f}")
+        print(f"      model offset at corners ({off_ex[0]:+.3f}, {off_ex[1]:+.3f}); uniform-field --same-pose "
+              f"prediction: offset ({off_u[0]:+.3f}, {off_u[1]:+.3f}), after offset median {m4:.3f} p95 {p4:.3f}; "
+              f"corners span field angle {ang.min():.1f}..{ang.max():.1f} deg")
+        pooled[cam] = (ang, np.linalg.norm(r - off, axis=1), np.linalg.norm(ex - off_ex, axis=1),
+                       ang_u, np.linalg.norm(d_u - off_u, axis=1), (m2, p2, m3, p3, m4, p4))
+
+    bins = np.arange(0, 90.1, 2.0)
+    print("\nerror vs field angle from the camera's own optical axis, offset removed (2 deg bins, median px):")
+    for cam, (ang, e_m, e_x, ang_u, e_u, _) in pooled.items():
+        xm, ym = _binned(ang, e_m, bins)
+        xx, yx = _binned(ang, e_x, bins)
+        xu, yu = _binned(ang_u, e_u, bins)
+        print(f"  {cam}:  {'angle':>6} {'measured':>9} {'model@corners':>14} {'same-pose':>10}")
+        for x, m_ in zip(xm, ym):
+            a = yx[np.isclose(xx, x)]
+            u = yu[np.isclose(xu, x)]
+            print(f"         {x:6.0f} {m_:9.3f} {a[0] if a.size else float('nan'):14.3f} {u[0] if u.size else float('nan'):10.3f}")
+
+    if not args.plot:
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    COL = {"measured": "#2a78d6", "model at corners": "#eb6834", "same-pose prediction": "#1baf7a"}
+    plt.rcParams.update({"font.size": 9, "axes.grid": True, "grid.color": "#e6e5e1",
+                         "axes.spines.top": False, "axes.spines.right": False,
+                         "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "legend.frameon": False})
+    fig, axs = plt.subplots(1, len(pooled), figsize=(5.5 * len(pooled), 4.2), squeeze=False)
+    for ax, (cam, (ang, e_m, e_x, ang_u, e_u, st)) in zip(axs[0], pooled.items()):
+        for (lab, col), (a_, e_) in zip(COL.items(), ((ang, e_m), (ang, e_x), (ang_u, e_u))):
+            x, y = _binned(a_, e_, bins)
+            ax.plot(x, y, "-", color=col, lw=2, label=lab)
+        ax.set_xlabel(f"field angle from {cam}'s optical axis [deg]")
+        ax.set_ylabel("median error after constant offset [px]")
+        ax.set_title(f"{cam} with the {[c for c in swapped if c != cam][0]} entry"
+                     + (" (own R)" if args.remove_rotation else "") + (" (own t)" if args.remove_translation else "")
+                     + f"\nmedian/p95: measured {st[0]:.2f}/{st[1]:.2f}, model@corners {st[2]:.2f}/{st[3]:.2f}, "
+                     f"same-pose {st[4]:.2f}/{st[5]:.2f}", loc="left", fontsize=9)
+        ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(args.plot, dpi=140)
+    print(f"wrote {args.plot}")
 
 
 if __name__ == "__main__":
