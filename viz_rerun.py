@@ -67,12 +67,19 @@ def decode_image(img):
 
 
 def rot_matrix(deg):
+    """Rotation the engine applies for a primitive's rx, ry, rz (degrees).
+
+    Mirrors kaolin_future/transform.py: Rz @ Ry @ Rx, where Rx and Ry are
+    the TRANSPOSES of the right-hand-rule matrices (transform.py:108-131)
+    while Rz is the usual one (transform.py:134-146). A textbook Rz Ry Rx
+    only agrees when rx = ry = 0, so tilted boards decoded mirrored.
+    """
     rx, ry, rz = [np.radians(a) for a in deg]
     cx, sx = np.cos(rx), np.sin(rx)
     cy, sy = np.cos(ry), np.sin(ry)
     cz, sz = np.cos(rz), np.sin(rz)
-    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
-    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    Rx = np.array([[1, 0, 0], [0, cx, sx], [0, -sx, cx]])
+    Ry = np.array([[cy, 0, -sy], [0, 1, 0], [sy, 0, cy]])
     Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
     return Rz @ Ry @ Rx
 
