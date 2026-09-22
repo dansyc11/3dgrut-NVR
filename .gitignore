@@ -52,3 +52,5 @@ mcap_outputs/
 *.mcap
 __pycache__/
 __pycache__/
+*.bak
+*.*bak
