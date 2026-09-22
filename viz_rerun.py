@@ -4,6 +4,13 @@
 Reads a tags bag for detections, an image bag for the rendered frames, a
 trajectory CSV for the eye path, and the board scene file for board geometry.
 Logs everything on one frame timeline, then prints detection statistics.
+
+--cam takes one camera (unchanged single-cam layout under cam/...) or a comma
+list (cama,camb,camc,camd): each camera then logs under its own subtree
+(cams/<name>/image, cams/<name>/image/tags, cams/<name>/stats/...) in ONE
+recording, keyed by header.seq on the shared "frame" timeline plus a "stamp"
+timeline from header.stampMonotonic, so all cameras tile in one viewer and
+scrub together. The 3D scene (boards, eye path) is logged once, shared.
 """
 
 import argparse
@@ -29,9 +36,15 @@ PALETTE = [(230, 80, 60), (60, 180, 230), (250, 200, 40), (120, 220, 120),
            (220, 120, 220), (255, 150, 50), (150, 150, 255)]
 
 
-def set_frame(i):
-    """Set the frame index. The API changed name across Rerun versions."""
+def set_frame(i, stamp_ns=None):
+    """Set the frame index (and optionally the header stamp timeline).
+    The API changed name across Rerun versions."""
     rr.set_time("frame", sequence=i)
+    if stamp_ns is not None:
+        try:
+            rr.set_time("stamp", timestamp=stamp_ns / 1e9)
+        except TypeError:
+            rr.set_time_nanos("stamp", stamp_ns)
 
 
 def log_scalar(path, value):
@@ -165,31 +178,20 @@ def log_scene(scene_file, boards_py, traj_csv, sz=DEFAULT_SZ):
     return None
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--tags", required=True)
-    p.add_argument("--images", default=None)
-    p.add_argument("--traj", default="")
-    p.add_argument("--scene", default="office_scene.json")
-    p.add_argument("--boards-py", default="threedgrut_playground/utils/boards.py")
-    p.add_argument("--sz", type=float, default=DEFAULT_SZ,
-                   help="quad z scale the boards were rendered with "
-                        "(engine autoscale: 0.5 in scenes wider than 5 units)")
-    p.add_argument("--cam", default="camd")
-    p.add_argument("--stride", type=int, default=10)
-    p.add_argument("--save", default="", help="write an .rrd instead of opening a window")
-    p.add_argument("--stats-only", action="store_true")
-    args = p.parse_args()
+def process_cam(args, cam, multi, grid_order):
+    """Read one camera's images and tags, log them, print its statistics.
 
-    tag_topic = "S1/" + args.cam + "/tags"
-    img_topic = "S1/" + args.cam
-
-    if not args.stats_only:
-        rr.init("vilota_boards_" + args.cam, spawn=not args.save)
-        if args.save:
-            rr.save(args.save)
-        print("scene:")
-        log_scene(args.scene, args.boards_py, args.traj, args.sz)
+    Single-cam mode (multi False) keeps the original layout and keying: entity
+    cam/..., stats under stats/..., timeline = per-topic message index. Multi
+    mode logs under cams/<cam>/... keyed by header.seq (identical across
+    cameras of one frame) and also sets the "stamp" timeline from
+    header.stampMonotonic. grid_order is shared across cameras so a grid keeps
+    one colour everywhere.
+    """
+    tag_topic = "S1/" + cam + "/tags"
+    img_topic = "S1/" + cam
+    prefix = ("cams/" + cam) if multi else "cam"
+    stats_prefix = ("cams/" + cam + "/stats") if multi else "stats"
 
     images = {}
     if args.images and not args.stats_only:
@@ -197,7 +199,14 @@ def main():
         with open(args.images, "rb") as fh:
             n = 0
             for _, ch, msg in make_reader(fh).iter_messages(topics=[img_topic]):
-                if n % args.stride == 0:
+                if multi:
+                    with VKI.Image.from_bytes(msg.data) as m:
+                        key = int(m.header.seq)
+                        if key % args.stride == 0:
+                            arr = decode_image(m)
+                            if arr is not None:
+                                images[key] = arr
+                elif n % args.stride == 0:
                     with VKI.Image.from_bytes(msg.data) as m:
                         arr = decode_image(m)
                         if arr is not None:
@@ -217,7 +226,7 @@ def main():
             with T.TagDetections.from_bytes(msg.data) as m:
                 if not meta_printed:
                     im = m.image
-                    print("camera " + args.cam + ": " + str(im.width) + "x"
+                    print("camera " + cam + ": " + str(im.width) + "x"
                           + str(im.height) + "  encoding " + str(im.encoding)
                           + "  exposure " + str(im.exposureUSec) + " us"
                           + "  gain " + str(im.gain))
@@ -227,11 +236,14 @@ def main():
                               + "x" + str(g.tagCols) + "  size " + str(round(g.tagSize, 5)))
                     meta_printed = True
 
+                key = int(m.header.seq) if multi else n
                 tags = list(m.tags)
                 per_frame.append(len(tags))
                 strips, colors, labels = [], [], []
                 for t in tags:
                     grid_hits[int(t.gridId)] += 1
+                    if int(t.gridId) not in grid_order:
+                        grid_order.append(int(t.gridId))
                     pts = np.array(t.pointsPolygon, dtype=np.float32)
                     if pts.size < 8:
                         continue
@@ -243,22 +255,22 @@ def main():
                     if norm_mode:
                         xy = xy * np.array([m.image.width, m.image.height])
                     spans.append(float(max(xy.max(0) - xy.min(0))))
-                    if not args.stats_only and n in images:
+                    if not args.stats_only and key in images:
                         strips.append(np.vstack([xy, xy[0]]))
-                        gi = list(grid_hits).index(int(t.gridId))
+                        gi = grid_order.index(int(t.gridId))
                         colors.append(PALETTE[gi % len(PALETTE)])
                         labels.append(str(t.id))
 
-                if not args.stats_only and n in images:
-                    set_frame(n)
-                    rr.log("cam/image", rr.Image(images[n]))
+                if not args.stats_only and key in images:
+                    set_frame(key, int(m.header.stampMonotonic) if multi else None)
+                    rr.log(prefix + "/image", rr.Image(images[key]))
                     if strips:
-                        rr.log("cam/image/tags",
+                        rr.log(prefix + "/image/tags",
                                rr.LineStrips2D(strips, colors=colors, labels=labels))
                     else:
-                        rr.log("cam/image/tags", rr.Clear(recursive=False))
-                    log_scalar("stats/tags_per_frame", len(tags))
-                    log_scalar("stats/grids_per_frame",
+                        rr.log(prefix + "/image/tags", rr.Clear(recursive=False))
+                    log_scalar(stats_prefix + "/tags_per_frame", len(tags))
+                    log_scalar(stats_prefix + "/grids_per_frame",
                                len({int(t.gridId) for t in tags}))
             n += 1
 
@@ -276,6 +288,42 @@ def main():
         print("tag span px: p5 " + str(round(float(np.percentile(s, 5)), 1))
               + "  median " + str(round(float(np.median(s)), 1))
               + "  p95 " + str(round(float(np.percentile(s, 95)), 1)))
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--tags", required=True)
+    p.add_argument("--images", default=None)
+    p.add_argument("--traj", default="")
+    p.add_argument("--scene", default="office_scene.json")
+    p.add_argument("--boards-py", default="threedgrut_playground/utils/boards.py")
+    p.add_argument("--sz", type=float, default=DEFAULT_SZ,
+                   help="quad z scale the boards were rendered with "
+                        "(engine autoscale: 0.5 in scenes wider than 5 units)")
+    p.add_argument("--cam", default="camd",
+                   help="one camera, or a comma list (cama,camb,camc,camd) to "
+                        "tile all of them in one recording")
+    p.add_argument("--stride", type=int, default=10)
+    p.add_argument("--save", default="", help="write an .rrd instead of opening a window")
+    p.add_argument("--stats-only", action="store_true")
+    args = p.parse_args()
+
+    cams = [c.strip() for c in args.cam.split(",") if c.strip()]
+    multi = len(cams) > 1
+
+    if not args.stats_only:
+        rr.init("vilota_boards_" + "_".join(cams), spawn=not args.save)
+        if args.save:
+            rr.save(args.save)
+        print("scene:")
+        log_scene(args.scene, args.boards_py, args.traj, args.sz)
+
+    grid_order = []          # shared first-seen grid order -> stable colours
+    for cam in cams:
+        if multi:
+            print("\n=== " + cam + " ===")
+        process_cam(args, cam, multi, grid_order)
+
     if args.save:
         print("wrote " + args.save)
 
