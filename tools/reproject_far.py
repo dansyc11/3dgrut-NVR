@@ -31,6 +31,17 @@ counterpart of swap_error_map.py --same-pose. Swap runs report the constant
 offset (mean residual vector) and the residual after removing it, and with
 --plot overlay the measured error vs field angle on the model prediction at
 the detected corners and on the uniform-field --same-pose prediction.
+
+--cross camSRC,camTGT (customer-style cross-camera check), per frame where
+both cameras detect the same tag id on the same board: undistort the SOURCE
+camera's detected corner through its own calibration into a ray, intersect
+the ray with the true board plane from the scene file (the drawn quad plane,
+local z = +1.25), project that 3D point into the TARGET through the
+extrinsics and the target's calibration, and compare against the target's
+detected corner. The 3D point comes from the source's measurement, not from
+ground truth; the ground-truth version (true corner projected into the
+target) is reported alongside to show what the source's detection noise and
+its calibration add.
 CPU only.
 """
 import argparse
@@ -86,6 +97,23 @@ class KB4:
         ok = (z > 0) & (u >= 0) & (u < self.w) & (v >= 0) & (v < self.h)
         return np.stack([u, v], 1), ok
 
+    def unproject(self, uv):
+        """Pixel (kaolin ray-centre convention) -> unit ray, Newton on theta."""
+        mx = (uv[:, 0] - self.cx) / self.fx
+        my = (uv[:, 1] - self.cy) / self.fy
+        ru = np.hypot(mx, my)
+        k1, k2, k3, k4 = self.k
+        th = ru.copy()
+        for _ in range(20):
+            t2 = th * th
+            f = th * (1 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4)))) - ru
+            fp = 1 + t2 * (3 * k1 + t2 * (5 * k2 + t2 * (7 * k3 + t2 * 9 * k4)))
+            th = th - f / fp
+        s = np.where(ru > 0, np.sin(th) / np.where(ru > 0, ru, 1.0), 1.0)
+        dirs = np.stack([mx * s, my * s, np.cos(th)], 1)
+        ok = np.isfinite(th) & (th >= 0) & (th < np.pi)
+        return dirs, ok
+
 
 class DS:
     def __init__(self, dc, w, h):
@@ -104,6 +132,22 @@ class DS:
         w2 = (wv + self.xi) / np.sqrt(2 * wv * self.xi + self.xi * self.xi + 1)
         ok = (z > -w2 * d1) & (den > 0) & (u >= 0) & (u < self.w) & (v >= 0) & (v < self.h)
         return np.stack([u, v], 1), ok
+
+    def unproject(self, uv):
+        """Closed-form Double Sphere unprojection (Usenko et al., eq. 46-51)."""
+        mx = (uv[:, 0] - self.cx) / self.fx
+        my = (uv[:, 1] - self.cy) / self.fy
+        r2 = mx * mx + my * my
+        ok = np.ones(len(r2), bool)
+        if self.alpha > 0.5:
+            lim = 1.0 / (2 * self.alpha - 1)
+            ok &= r2 <= lim
+            r2 = np.minimum(r2, lim)
+        mz = (1 - self.alpha * self.alpha * r2) / (
+            self.alpha * np.sqrt(np.maximum(1 - (2 * self.alpha - 1) * r2, 0.0)) + 1 - self.alpha)
+        s = (mz * self.xi + np.sqrt(mz * mz + (1 - self.xi * self.xi) * r2)) / (mz * mz + r2)
+        dirs = np.stack([s * mx, s * my, s * mz - self.xi], 1)
+        return dirs / np.linalg.norm(dirs, axis=1, keepdims=True), ok
 
 
 def load_cams(path):
@@ -197,6 +241,13 @@ def board_corners_3d(entry):
     return out
 
 
+def board_plane(entry):
+    """(point, normal) of the drawn quad plane: board local z = QUAD_Z_OFF."""
+    R = viz.rot_matrix(entry.get("rot", [0, 0, 0]))
+    pos = np.array(entry["pos"], float)
+    return pos + R @ np.array([0.0, 0.0, QUAD_Z_OFF]), R @ np.array([0.0, 0.0, 1.0])
+
+
 def read_detections(path, stride, n_poses, boards, wanted):
     """cam -> board -> [(seq, tag id, (4,2) px)]. Detections whose grid is
     not a scene board (stray grids, gridId 0 = no grid) are discarded and
@@ -265,8 +316,13 @@ def main():
     ap.add_argument("--remove-translation", action="store_true",
                     help="with --swap: keep each camera's own extrinsic translation")
     ap.add_argument("--plot", default="", help="with --swap: error-vs-field-angle overlay PNG")
+    ap.add_argument("--cross", default="",
+                    help="camSRC,camTGT: ray-cast SRC detections onto the true board plane, "
+                         "project the 3D points into TGT, compare with TGT detections")
     args = ap.parse_args()
     wanted = [c.strip() for c in args.cams.split(",")]
+    if args.cross:
+        wanted = list(dict.fromkeys(wanted + [c.strip() for c in args.cross.split(",")]))
 
     cams = load_cams(args.calib)
     used = dict(cams)
@@ -287,8 +343,10 @@ def main():
               + (" (own translation kept)" if args.remove_translation else ""))
     rows = [[float(r[k]) for k in ("x", "y", "z", "roll", "pitch", "yaw")]
             for r in csv.DictReader(open(args.traj))]
-    boards = {b["material"]: board_corners_3d(b) for b in json.load(open(args.scene))["boards"]
-              if b["material"] in GRID_NAMES.values()}
+    scene_boards = [b for b in json.load(open(args.scene))["boards"]
+                    if b["material"] in GRID_NAMES.values()]
+    boards = {b["material"]: board_corners_3d(b) for b in scene_boards}
+    planes = {b["material"]: board_plane(b) for b in scene_boards}
     print(f"{len(rows)} poses, boards {list(boards)}, cameras {wanted}, calib {os.path.basename(args.calib)}")
     det = read_detections(args.tags, args.stride, len(rows), boards, wanted)
 
@@ -358,6 +416,8 @@ def main():
             e = np.concatenate([x.ravel() for x in es])
             print(f"  {cam}: {e.size} corners  median {np.median(e):.3f}  p95 {np.percentile(e, 95):.3f}")
 
+    if args.cross:
+        report_cross(args, cams, rows, boards, planes, det)
     if not swapped:
         return
     report_swap(results, swapped, cams, used, args)
@@ -377,6 +437,98 @@ def _binned(ang, err, bins):
             xs.append(0.5 * (bins[b - 1] + bins[b]))
             ys.append(np.median(err[sel]))
     return np.array(xs), np.array(ys)
+
+
+def report_cross(args, cams, rows, boards, planes, det):
+    """--cross camSRC,camTGT: per frame where both cameras see the same tag,
+    unproject the source's detected corners, intersect with the true board
+    plane, project into the target, compare with the target's detections.
+    The ground-truth version (true corner projected into the target) runs on
+    the same corners so the source's contribution is the difference."""
+    src, tgt = [c.strip() for c in args.cross.split(",")]
+    model_s, T_s = cams[CAM_NAMES.index(src)]
+    model_t, T_t = cams[CAM_NAMES.index(tgt)]
+    S = np.array([1.0, -1.0, -1.0])
+    per = {}
+    for name, corners3d in boards.items():
+        p0, nrm = planes[name]
+        by_seq_s, by_seq_t = defaultdict(dict), defaultdict(dict)
+        for seq, tid, px in det[src].get(name, []):
+            by_seq_s[seq][tid] = px
+        for seq, tid, px in det[tgt].get(name, []):
+            by_seq_t[seq][tid] = px
+        err_c, ang_c, meas, proj_gt, ang_g, frames = [], [], [], [], [], set()
+        dropped = 0
+        for seq in sorted(set(by_seq_s) & set(by_seq_t)):
+            shared = sorted(set(by_seq_s[seq]) & set(by_seq_t[seq]))
+            if not shared:
+                continue
+            view_d = camd_view(rows[seq])
+            view_s = cam_view(view_d, T_s)
+            view_t = cam_view(view_d, T_t)
+            Rs = view_s[:3, :3]
+            C = -Rs.T @ view_s[:3, 3]           # source camera centre, world
+            for tid in shared:
+                px_s, px_t = by_seq_s[seq][tid], by_seq_t[seq][tid]
+                dcv, ok_u = model_s.unproject(px_s + 0.5)   # detector -> kaolin convention
+                dw = (dcv * S) @ Rs                          # rows: Rs.T @ (S d_cv)
+                den = dw @ nrm
+                good = np.abs(den) > 1e-9
+                tt = np.where(good, ((p0 - C) @ nrm) / np.where(good, den, 1.0), -1.0)
+                X = C + tt[:, None] * dw
+                uv, ok_p = project(model_t, view_t, X)
+                uv_g, ok_g = project(model_t, view_t, corners3d[tid])
+                # keep tags whole so the GT corner-order match stays well posed
+                if not (ok_u & ok_p & good & (tt > 0)).all() or not ok_g.all():
+                    dropped += 1
+                    continue
+                frames.add(seq)
+                err_c.append(uv - px_t)
+                ang_c.append(field_angle_deg(cam_points(view_t, X)))
+                meas.append(px_t)
+                proj_gt.append(uv_g)
+                ang_g.append(field_angle_deg(cam_points(view_t, corners3d[tid])))
+        if not err_c:
+            continue
+        err_c, meas, proj_gt = np.array(err_c), np.array(meas), np.array(proj_gt)
+        r_gt, shift = match_order(meas, proj_gt)
+        s_, rev = shift
+        order = np.roll(np.arange(4)[::rev], s_)
+        per[name] = dict(frames=len(frames), tags=len(err_c), dropped=dropped, shift=shift,
+                         e_c=np.linalg.norm(err_c, axis=2), ang_c=np.array(ang_c),
+                         e_g=np.linalg.norm(r_gt, axis=2), ang_g=np.array(ang_g)[:, order])
+    if not per:
+        print(f"\n--cross {src},{tgt}: no co-visible tags")
+        return
+
+    print(f"\n--cross {src} -> {tgt}: {src} corner -> own ray -> true board plane -> "
+          f"3D point -> {tgt} projection, vs {tgt}'s detection [px]")
+    hdr = (f"{'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'cross med':>9} {'p95':>8} | "
+           f"{'truth med':>9} {'p95':>8} | shift")
+    print(hdr)
+    print("-" * len(hdr))
+    for name, P in per.items():
+        print(f"{name:11} {P['frames']:6d} {P['tags']:6d} {P['e_c'].size:7d} | "
+              f"{np.median(P['e_c']):9.3f} {np.percentile(P['e_c'], 95):8.3f} | "
+              f"{np.median(P['e_g']):9.3f} {np.percentile(P['e_g'], 95):8.3f} | {P['shift']}"
+              + (f"   ({P['dropped']} tags dropped)" if P["dropped"] else ""))
+    e_c = np.concatenate([P["e_c"].ravel() for P in per.values()])
+    e_g = np.concatenate([P["e_g"].ravel() for P in per.values()])
+    ang_c = np.concatenate([P["ang_c"].ravel() for P in per.values()])
+    ang_g = np.concatenate([P["ang_g"].ravel() for P in per.values()])
+    print(f"{'ALL':11} {sum(P['frames'] for P in per.values()):6d} "
+          f"{sum(P['tags'] for P in per.values()):6d} {e_c.size:7d} | "
+          f"{np.median(e_c):9.3f} {np.percentile(e_c, 95):8.3f} | "
+          f"{np.median(e_g):9.3f} {np.percentile(e_g, 95):8.3f} |")
+
+    bins = np.arange(0, 90.1, 2.0)
+    xc, yc = _binned(ang_c, e_c, bins)
+    xg, yg = _binned(ang_g, e_g, bins)
+    print(f"\nerror vs field angle from {tgt}'s optical axis (2 deg bins, median px):")
+    print(f"  {'angle':>6} {'cross':>8} {'truth':>8}")
+    for x, c in zip(xc, yc):
+        g = yg[np.isclose(xg, x)]
+        print(f"  {x:6.0f} {c:8.3f} {g[0] if g.size else float('nan'):8.3f}")
 
 
 def report_swap(results, swapped, cams, used, args):
