@@ -4,6 +4,7 @@
         [--scene office_scene_v9.json] [--calib calibration_files/....json]
         [--stride 1] [--cams cama,camb,camc,camd]
         [--swap camb,camc [--remove-rotation] [--remove-translation] [--plot out.png]]
+        [--fitted-calib]
 
 Every tag's four black-square corners are placed in 3D from the texture
 layout (boards.py / create_aprilgrid.py: square 800 px, gap 240 px, padding
@@ -21,6 +22,16 @@ per-board cyclic corner-order shift (detector canonical order vs texture
 TL,TR,BR,BL) chosen by minimum median. The projection includes the half-pixel
 convention difference between kaolin's ray centres (i + 0.5) and the
 detector's integer-centred coordinates. The CSV row index is header.seq.
+
+--fitted-calib removes that half-pixel shift, in project() for every mode and
+in the matching +0.5 of the --cross unproject. Leave it off for the device
+file that drove the render: its model describes kaolin's rays, which pass
+through pixel i + 0.5, so its projections must move half a pixel to land in
+detector coordinates. Turn it on for vk_calibrate results (converted with
+tools/basalt_to_device.py) and any other calibration fitted from detections:
+such a fit is estimated in the detector's integer-centred coordinates and has
+already absorbed the half pixel, so the shift would count it twice (v9 fit on
+far10p4: 0.63-0.82 px median per camera instead of 0.44-0.51).
 
 --swap camX,camY projects each of the two cameras' detections through the
 OTHER camera's calibration entry (intrinsics and extrinsics), i.e. the error
@@ -189,11 +200,12 @@ def cam_points(view_i, X):
     return Xgl * np.array([1.0, -1.0, -1.0])
 
 
-def project(model, view_i, X):
+def project(model, view_i, X, half_px=0.5):
     uv, ok = model.project(cam_points(view_i, X))
     # kaolin casts pixel i's ray through i + 0.5; the detector reports
     # integer-centred pixel coordinates, so the render is offset by half a pixel.
-    return uv - 0.5, ok
+    # half_px = 0 for a calibration fitted from detections (--fitted-calib).
+    return uv - half_px, ok
 
 
 def field_angle_deg(Xcv):
@@ -319,7 +331,11 @@ def main():
     ap.add_argument("--cross", default="",
                     help="camSRC,camTGT: ray-cast SRC detections onto the true board plane, "
                          "project the 3D points into TGT, compare with TGT detections")
+    ap.add_argument("--fitted-calib", action="store_true",
+                    help="--calib was fitted from detections (vk_calibrate): drop the render's "
+                         "half-pixel shift; leave off for the device file that drove the render")
     args = ap.parse_args()
+    half_px = 0.0 if args.fitted_calib else 0.5
     wanted = [c.strip() for c in args.cams.split(",")]
     if args.cross:
         wanted = list(dict.fromkeys(wanted + [c.strip() for c in args.cross.split(",")]))
@@ -347,7 +363,8 @@ def main():
                     if b["material"] in GRID_NAMES.values()]
     boards = {b["material"]: board_corners_3d(b) for b in scene_boards}
     planes = {b["material"]: board_plane(b) for b in scene_boards}
-    print(f"{len(rows)} poses, boards {list(boards)}, cameras {wanted}, calib {os.path.basename(args.calib)}")
+    print(f"{len(rows)} poses, boards {list(boards)}, cameras {wanted}, calib {os.path.basename(args.calib)}"
+          + (" (--fitted-calib: no half-pixel shift)" if args.fitted_calib else ""))
     det = read_detections(args.tags, args.stride, len(rows), boards, wanted)
 
     results = {}
@@ -370,10 +387,10 @@ def main():
                 view_d = camd_view(rows[seq])
                 view_i = cam_view(view_d, T_D_i)
                 X = np.vstack([corners3d[tid] for tid, _ in lst])
-                uv, ok = project(model, view_i, X)
+                uv, ok = project(model, view_i, X, half_px)
                 th = field_angle_deg(cam_points(view_i, X)).reshape(-1, 4)
                 if is_swap:
-                    uv_u, ok_u = project(model_u, cam_view(view_d, T_u), X)
+                    uv_u, ok_u = project(model_u, cam_view(view_d, T_u), X, half_px)
                     ok = ok & ok_u
                     uv_u = uv_u.reshape(-1, 4, 2)
                 uv, ok = uv.reshape(-1, 4, 2), ok.reshape(-1, 4).all(1)
@@ -446,6 +463,7 @@ def report_cross(args, cams, rows, boards, planes, det):
     The ground-truth version (true corner projected into the target) runs on
     the same corners so the source's contribution is the difference."""
     src, tgt = [c.strip() for c in args.cross.split(",")]
+    half_px = 0.0 if args.fitted_calib else 0.5
     model_s, T_s = cams[CAM_NAMES.index(src)]
     model_t, T_t = cams[CAM_NAMES.index(tgt)]
     S = np.array([1.0, -1.0, -1.0])
@@ -470,14 +488,14 @@ def report_cross(args, cams, rows, boards, planes, det):
             C = -Rs.T @ view_s[:3, 3]           # source camera centre, world
             for tid in shared:
                 px_s, px_t = by_seq_s[seq][tid], by_seq_t[seq][tid]
-                dcv, ok_u = model_s.unproject(px_s + 0.5)   # detector -> kaolin convention
+                dcv, ok_u = model_s.unproject(px_s + half_px)  # detector -> model convention
                 dw = (dcv * S) @ Rs                          # rows: Rs.T @ (S d_cv)
                 den = dw @ nrm
                 good = np.abs(den) > 1e-9
                 tt = np.where(good, ((p0 - C) @ nrm) / np.where(good, den, 1.0), -1.0)
                 X = C + tt[:, None] * dw
-                uv, ok_p = project(model_t, view_t, X)
-                uv_g, ok_g = project(model_t, view_t, corners3d[tid])
+                uv, ok_p = project(model_t, view_t, X, half_px)
+                uv_g, ok_g = project(model_t, view_t, corners3d[tid], half_px)
                 # keep tags whole so the GT corner-order match stays well posed
                 if not (ok_u & ok_p & good & (tt > 0)).all() or not ok_g.all():
                     dropped += 1
