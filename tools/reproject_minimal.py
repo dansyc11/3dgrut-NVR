@@ -4,6 +4,13 @@ from the trajectory CSV poses through the device calibration (KB4 or Double
 Sphere): prints the per-frame and overall median |detected - projected| px.
 Teaching copy of tools/reproject_far.py, which adds multi-board scenes,
 rotated boards, swaps and cross-camera checks.
+
+--fitted-calib drops the half-pixel shift applied to every projection. Leave
+it off for the device file that drove the render: kaolin's rays pass through
+pixel i + 0.5 and the detector counts from i, so the true model's projections
+sit half a pixel off the detections. Turn it on for vk_calibrate results
+(tools/basalt_to_device.py) and any calibration fitted from detections: the
+fit already absorbed that half pixel, and the shift would count it twice.
 """
 import argparse, csv, json, os, sys
 import numpy as np
@@ -77,6 +84,8 @@ def main():
     ap.add_argument("--scene", default=os.path.join(REPO, "far_500m.json"))
     ap.add_argument("--calib", default=os.path.join(REPO, "calibration_files/DP180IP-30020104.json"))
     ap.add_argument("--cam", default="camd")
+    ap.add_argument("--fitted-calib", action="store_true",
+                    help="--calib was fitted from detections (vk_calibrate): no half-pixel shift")
     a = ap.parse_args()
     corners = board_corners(a.scene)
     project, T_D_i = load_cam(a.calib, a.cam)
@@ -104,9 +113,10 @@ def main():
                         * [m.image.width, m.image.height]   # corners come normalised
                     X = corners[int(t.id)] @ view[:3, :3].T + view[:3, 3]
                     uv = project(X * [1.0, -1.0, -1.0])  # OpenGL -> OpenCV camera axes
-                    uv -= 0.5   # kaolin rays go through pixel centre i+0.5; the
-                                # detector reports integer-centred pixels. Its
-                                # corner order is the texture order REVERSED:
+                    if not a.fitted_calib:
+                        uv -= 0.5   # kaolin rays go through pixel centre i+0.5; the
+                                    # detector reports integer-centred pixels.
+                    # The detector's corner order is the texture order REVERSED:
                     fe.extend(np.linalg.norm(meas - uv[[3, 2, 1, 0]], axis=1))
                 if fe:
                     per_frame[m.header.seq] = np.median(fe)
