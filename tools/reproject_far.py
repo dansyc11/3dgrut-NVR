@@ -1,7 +1,7 @@
 """Corner-level reprojection check of a playground render, per camera and board.
 
-    python tools/reproject_far.py [--tags office_v9_tags.mcap] [--traj ...csv]
-        [--scene office_scene_v9.json] [--calib calibration_files/....json]
+    python tools/reproject_far.py --tags TAGS.mcap --traj TRAJ.csv --scene SCENE.json
+        [--calib calibration_files/....json]
         [--stride 1] [--cams cama,camb,camc,camd]
         [--swap camb,camc [--remove-rotation] [--remove-translation] [--plot out.png]]
         [--fitted-calib]
@@ -315,9 +315,9 @@ def match_order(meas, proj):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tags", default=os.path.expanduser("~/vilota_results/office_v9_tags.mcap"))
-    ap.add_argument("--traj", default=os.path.expanduser("~/vilota_results/office_v9_traj.csv"))
-    ap.add_argument("--scene", default=os.path.join(REPO, "office_scene_v9.json"))
+    ap.add_argument("--tags", required=True, help="tags mcap the detector wrote for the render")
+    ap.add_argument("--traj", required=True, help="trajectory CSV that drove the render (row index = header.seq)")
+    ap.add_argument("--scene", required=True, help="scene JSON with the render's board placements, e.g. far_10m.json")
     ap.add_argument("--calib", default=os.path.join(REPO, "calibration_files/DP180IP-30020104.json"))
     ap.add_argument("--stride", type=int, default=1, help="use every Nth frame")
     ap.add_argument("--cams", default="cama,camb,camc,camd")

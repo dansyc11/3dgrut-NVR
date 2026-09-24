@@ -79,9 +79,9 @@ def load_cam(calib_path, cam):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tags", default=os.path.expanduser("~/vilota_results/far500_tags.mcap"))
-    ap.add_argument("--traj", default=os.path.expanduser("~/vilota_results/far500_traj.csv"))
-    ap.add_argument("--scene", default=os.path.join(REPO, "far_500m.json"))
+    ap.add_argument("--tags", required=True, help="tags mcap the detector wrote for the render")
+    ap.add_argument("--traj", required=True, help="trajectory CSV that drove the render (row index = header.seq)")
+    ap.add_argument("--scene", required=True, help="scene JSON with the aprilgrid placement, e.g. far_500m.json")
     ap.add_argument("--calib", default=os.path.join(REPO, "calibration_files/DP180IP-30020104.json"))
     ap.add_argument("--cam", default="camd")
     ap.add_argument("--fitted-calib", action="store_true",
