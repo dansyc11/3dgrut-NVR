@@ -101,7 +101,7 @@ def setup_playground(conf):
             "-line-directive-mode",
             "none",
             "-O2",
-            f"-DPARTICLE_RADIANCE_NUM_COEFFS={(conf.render.particle_radiance_sph_degree + 1) ** 2}",
+            "-DPARTICLE_RADIANCE_NUM_COEFFS=16",  # pinned: the slang SH decoder indexes 0..15 unconditionally and cannot compile below 16, and the generated gaussianParticles.cuh bakes this as the per-Gaussian fetch stride. Sub-degree-3 plys are zero-padded to degree 3 at load (init_from_ply) to match.
             f"-DGAUSSIAN_PARTICLE_KERNEL_DEGREE={conf.render.particle_kernel_degree}",
             f"-DGAUSSIAN_PARTICLE_MIN_KERNEL_DENSITY={conf.render.particle_kernel_min_response}",
             f"-DGAUSSIAN_PARTICLE_MIN_ALPHA={conf.render.particle_kernel_min_alpha}",
