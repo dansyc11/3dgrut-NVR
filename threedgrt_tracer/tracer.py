@@ -37,15 +37,12 @@ def load_3dgrt_plugin(conf):
     global _3dgrt_plugin
     if _3dgrt_plugin is None:
         try:
-            print("In try")
             from . import lib3dgrt_cc as tdgrt  # type: ignore
         except ImportError:
-            print("In except")
             from .setup_3dgrt import setup_3dgrt
 
             tdgrt = setup_3dgrt(conf)
         _3dgrt_plugin = tdgrt
-        print("Success")
 
 
 # ----------------------------------------------------------------------------
