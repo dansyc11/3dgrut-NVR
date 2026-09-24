@@ -46,8 +46,10 @@ from tqdm import trange
 class Playground:
     AVAILABLE_CONTROLLERS = ['Turntable', 'First Person', 'Free']
 
-    def __init__(self, gs_object, mesh_assets_folder, default_config, buffer_mode="device2device"):
+    def __init__(self, gs_object, mesh_assets_folder, default_config, buffer_mode="device2device",
+                 initial_pose=None):
 
+        self.initial_pose = initial_pose  # 9 floats: eye, target, up in world coords, or None
         self.engine = Engine3DGRUT(gs_object, mesh_assets_folder, default_config)
         self.scene_mog = self.engine.scene_mog
         self.primitives = self.engine.primitives
@@ -120,6 +122,13 @@ class Playground:
 
         ps.init()
         ps.set_user_callback(self.ps_ui_callback)
+
+        if self.initial_pose is not None:
+            # Place the launch camera at an explicit world pose. The home view is useless for
+            # scenes that do not fit the hardcoded +-1.5 bounding box above (e.g. a city with a
+            # sky dome): polyscope homes near the origin, which may be inside or under geometry.
+            eye, target, up = (np.array(self.initial_pose[i:i + 3], dtype=float) for i in (0, 3, 6))
+            ps.look_at_dir(eye, target, up)
 
         self.slice_planes = [ps.add_scene_slice_plane() for _ in range(6)]
         self.slice_plane_enabled = [False for _ in range(6)]
