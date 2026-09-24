@@ -1,0 +1,288 @@
+{
+    "common": {
+        "tf_prefix": "S1/",
+        "product_name": "VK180-V2-FFC",
+        "playback_mode": 2
+    },
+    "ecal_publishers": [
+        {
+            "enforce_realtime": false,
+            "type": "tagdetection",
+            "input": "cama/tags",
+            "ecal_topic": "cama/tags"
+        },
+        {
+            "enforce_realtime": false,
+            "type": "tagdetection",
+            "input": "camb/tags",
+            "ecal_topic": "camb/tags"
+        },
+        {
+            "enforce_realtime": false,
+            "type": "tagdetection",
+            "input": "camc/tags",
+            "ecal_topic": "camc/tags"
+        },
+        {
+            "enforce_realtime": false,
+            "type": "tagdetection",
+            "input": "camd/tags",
+            "ecal_topic": "camd/tags"
+        }
+    ],
+    "ecal_subscribers": [
+        {
+            "type": "image",
+            "output": "cama",
+            "ecal_topic": "cama"
+        },
+        {
+            "type": "image",
+            "output": "camb",
+            "ecal_topic": "camb"
+        },
+        {
+            "type": "image",
+            "output": "camc",
+            "ecal_topic": "camc"
+        },
+        {
+            "type": "image",
+            "output": "camd",
+            "ecal_topic": "camd"
+        }
+    ],
+    "mipmap": [
+        {
+            "enforce_realtime": false,
+            "input": "cama",
+            "start_level": 0,
+            "levels": 2,
+            "enable_stats": false
+        },
+        {
+            "enforce_realtime": false,
+            "input": "camb",
+            "start_level": 0,
+            "levels": 2,
+            "enable_stats": false
+        },
+        {
+            "enforce_realtime": false,
+            "input": "camc",
+            "start_level": 0,
+            "levels": 2,
+            "enable_stats": false
+        },
+        {
+            "enforce_realtime": false,
+            "input": "camd",
+            "start_level": 0,
+            "levels": 2,
+            "enable_stats": false
+        }
+    ],
+    "apriltag": {
+        "enforce_realtime": false,
+        "input": [
+            "cama_pyr",
+            "camb_pyr",
+            "camc_pyr",
+            "camd_pyr"
+        ],
+        "sync": [
+            false,
+            false,
+            false,
+            false
+        ],
+        "output": [
+            "cama/tags",
+            "camb/tags",
+            "camc/tags",
+            "camd/tags"
+        ],
+        "debug": 0,
+        "decimate": 1.0,
+        "use_mipmap": 1,
+        "refine_edges": 1,
+        "tag_family": "tag16h5",
+        "black_border": 2,
+        "apriltag_version": 3,
+        "april_grids": [
+            {
+                "tag_cols": 1,
+                "tag_rows": 3,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [
+                    0,
+                    3,
+                    6
+                ],
+                "increment": 3
+            },
+            {
+                "tag_cols": 2,
+                "tag_rows": 2,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [
+                    0,
+                    2,
+                    4,
+                    6
+                ],
+                "increment": 2
+            },
+            {
+                "tag_cols": 7,
+                "tag_rows": 4,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    16,
+                    17,
+                    18,
+                    19,
+                    20,
+                    21,
+                    22,
+                    23,
+                    24,
+                    25,
+                    26,
+                    27
+                ],
+                "increment": 1
+            },
+            {
+                "tag_cols": 7,
+                "tag_rows": 4,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [
+                    0,
+                    14,
+                    1,
+                    15,
+                    2,
+                    16,
+                    3,
+                    17,
+                    4,
+                    18,
+                    5,
+                    19,
+                    6,
+                    20,
+                    7,
+                    21,
+                    8,
+                    22,
+                    9,
+                    23,
+                    10,
+                    24,
+                    11,
+                    25,
+                    12,
+                    26,
+                    13,
+                    27
+                ],
+                "increment": 1
+            },
+            {
+                "tag_cols": 7,
+                "tag_rows": 4,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [
+                    0,
+                    15,
+                    1,
+                    16,
+                    2,
+                    17,
+                    3,
+                    18,
+                    4,
+                    19,
+                    5,
+                    20,
+                    6,
+                    21,
+                    7,
+                    22,
+                    8,
+                    23,
+                    9,
+                    24,
+                    10,
+                    25,
+                    11,
+                    26,
+                    12,
+                    27,
+                    13,
+                    28
+                ],
+                "increment": 1
+            },
+            {
+                "tag_cols": 7,
+                "tag_rows": 4,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [
+                    0,
+                    16,
+                    1,
+                    17,
+                    2,
+                    18,
+                    3,
+                    19,
+                    4,
+                    20,
+                    5,
+                    21,
+                    6,
+                    22,
+                    7,
+                    23,
+                    8,
+                    24,
+                    9,
+                    25,
+                    10,
+                    26,
+                    11,
+                    27,
+                    12,
+                    28,
+                    13,
+                    29
+                ],
+                "increment": 1
+            }
+        ]
+    }
+}

@@ -1,0 +1,66 @@
+{
+  "boards": [
+    {
+      "material": "aprilgrid",
+      "tag_cm": 15.0,
+      "pos": [
+        0.0,
+        -1.2,
+        -4.85
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "_note": "near, 15 cm, all eyes in front, inside CamA field"
+    },
+    {
+      "material": "grid_off14",
+      "tag_cm": 20.0,
+      "pos": [
+        0.0,
+        -0.16,
+        -4.0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "_note": "mid, 20 cm so CamA stays above 30 px at the far eye"
+    },
+    {
+      "material": "grid_off15",
+      "sx": 1.41,
+      "sy": 0.825,
+      "pos": [
+        0.0,
+        2.53,
+        -3.0
+      ],
+      "rot": [
+        -25,
+        0,
+        0
+      ],
+      "_note": "low, far, 30 cm"
+    },
+    {
+      "material": "vilota_logo",
+      "sx": 0.35,
+      "sy": 0.35,
+      "pos": [
+        -1.7673,
+        -5.4346,
+        -4.0
+      ],
+      "rot": [
+        150.612,
+        0,
+        -180
+      ],
+      "_note": "logo"
+    }
+  ]
+}

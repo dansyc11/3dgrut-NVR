@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "Office layout under the real constraints: near and mid within 3 m,",
+    "far within 7 m and mounted high. Far sits at 4.5 m, not 7, because a",
+    "15 cm tag at 7 m spans 13 px on CamD and 8 px on CamA - undetectable.",
+    "At 4.5 m it spans 20.6 px on CamD, serving exactly the Double Sphere",
+    "camera that needs the depth diversity. Axis: y up, -z forward. rot is",
+    "[rx, ry, rz] in degrees, default flat facing +z; tweak by hand if a",
+    "board needs a tilt."
+  ],
+  "boards": [
+    {
+      "material": "grid_2x2",
+      "tag_cm": 15.0,
+      "pos": [
+        0.0,
+        -0.6,
+        -2.0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "_note": "near, low - 4 tags"
+    },
+    {
+      "material": "grid_3x3",
+      "tag_cm": 15.0,
+      "pos": [
+        0.0,
+        0.0,
+        -2.5
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "_note": "mid, eye - 9 tags, replaces the 3-tag 3x1"
+    },
+    {
+      "material": "aprilgrid",
+      "tag_cm": 15.0,
+      "pos": [
+        0.0,
+        1.5,
+        -4.5
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "_note": "far, high - 28 tags"
+    }
+  ]
+}

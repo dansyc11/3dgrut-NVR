@@ -1,0 +1,11 @@
+{
+    "viewer": {
+        "image": ["S1/cama", "S1/camb", "S1/camc", "S1/camd"],
+        "tag": ["S1/cama/tags", "S1/camb/tags", "S1/camc/tags", "S1/camd/tags"],
+        "imu": [], "gps": [], "imu_list": [], "odom": [], "vio_state": [],
+        "hfflow": [], "detections_2d": [], "disparity": [], "depth": [],
+        "confidence_map": [], "euclidean_dist": [], "point_cloud": [],
+        "memory_limit": "1GB",
+        "visualise_point_cloud": false
+    }
+}

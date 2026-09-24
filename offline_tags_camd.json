@@ -1,0 +1,57 @@
+{
+    "common": {
+        "tf_prefix": "S1/",
+        "product_name": "VK180-V2-FFC",
+        "playback_mode": 2
+    },
+    "ecal_publishers":
+    [
+        {
+            "enforce_realtime": false,
+            "type": "tagdetection",
+            "input": "camd/tags",
+            "ecal_topic": "camd/tags"
+        }
+    ],
+    "ecal_subscribers":
+    [
+        {
+            "type": "image",
+            "output": "camd",
+            "ecal_topic": "camd"
+        }
+    ],
+    "mipmap":
+    [
+        {
+            "enforce_realtime": false,
+            "input": "camd",
+            "start_level": 0,
+            "levels": 2,
+            "enable_stats": true
+        }
+    ],
+    "apriltag": {
+        "enforce_realtime": false,
+        "input": ["camd_pyr"],
+        "sync": [false],
+        "output": ["camd/tags"],
+        "debug": 0,
+        "decimate": 1.0,
+        "use_mipmap": 1,
+        "refine_edges": 1,
+        "tag_family": "tag16h5",
+        "black_border": 2,
+        "apriltag_version": 3,
+        "april_grids": [
+            {
+                "tag_cols": 7,
+                "tag_rows": 4,
+                "size": 0.05173,
+                "spacing": 0.3,
+                "start_ids": [0],
+                "increment": 1
+            }
+        ]
+    }
+}
