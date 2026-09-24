@@ -1,3 +1,5 @@
+> **Vilota fork.** This is Vilota's fork of NVIDIA 3DGRUT. For the Vilota additions (device rendering, calibration and VIO simulation tools), their installation and workflows, see [VILOTA.md](VILOTA.md). The rest of this README is NVIDIA's.
+
 <p align="center">
   <img height="100" src="assets/3dgrut_logo.png">
 </p>

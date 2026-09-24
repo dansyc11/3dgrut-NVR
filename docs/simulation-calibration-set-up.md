@@ -300,7 +300,7 @@ Screenshots for the 📷 notes in this guide are available on request.
 > 📷 **PIC 4 — Render widget**, DS dropdown + Frames Between 1 in one shot.
 
 
-6. Scroll back down to **Save/Load Video trajectory** (a different section from Record Trajectory Video, further down under the calibration block) → **Build Orbit Trajectory**. Terminal prints `per-camera poses: {0: 180, 1: 180, 2: 180, 3: 756}`.
+6. Scroll back down to **Save/Load Video trajectory** (a different section from Record Trajectory Video, further down under the calibration block) → **Trajectory type** Orbit → **Build Trajectory**. Terminal prints `per-camera poses: {0: 180, 1: 180, 2: 180, 3: 756}`.
 7. Last check: dropdown says Double Sphere, board is wider than tall. These two have wasted more renders than everything else combined.
 8. **Render Device Trajectory MCAP**. One progress bar per camera. The app exits when done and writes `mcap_outputs/long_final_path.mcap`.
 
@@ -318,7 +318,8 @@ mv mcap_outputs/long_final_path.mcap mcap_outputs/orbit_${RUN}.mcap
 
 python fix_mcap_labels.py mcap_outputs/orbit_${RUN}.mcap ${RUN}_img.mcap \
   --topics S1/camd --serial ${SERIAL}
-TOPIC="S1/camd/tags:queued" ./run_offline_tags.sh ${RUN}_img.mcap ${RUN}_tags.mcap
+python tools/retime_for_detector.py ${RUN}_img.mcap ${RUN}_img_rt.mcap
+TOPIC="S1/camd/tags:queued" ./run_offline_tags.sh ${RUN}_img_rt.mcap ${RUN}_tags.mcap
 
 vk_calibrate \
   --vbag-path ${RUN}_tags.mcap \
@@ -335,15 +336,18 @@ mv mcap_outputs/long_final_path.mcap mcap_outputs/orbit_${RUN}.mcap
 
 python fix_mcap_labels.py mcap_outputs/orbit_${RUN}.mcap ${RUN}_img.mcap \
   --topics S1/cama S1/camb S1/camc S1/camd --serial ${SERIAL}
+python tools/retime_for_detector.py ${RUN}_img.mcap ${RUN}_img_rt.mcap
 CONFIG=offline_tags_all.json \
 TOPIC="S1/cama/tags:queued S1/camb/tags:queued S1/camc/tags:queued S1/camd/tags:queued" \
-./run_offline_tags.sh ${RUN}_img.mcap ${RUN}_tags.mcap
+./run_offline_tags.sh ${RUN}_img_rt.mcap ${RUN}_tags.mcap
 
 vk_calibrate \
   --vbag-path ${RUN}_tags.mcap \
   --cam-types kb4 kb4 kb4 ds --focal-lengths -1 -1 -1 550 \
   --serial-number ${SERIAL} --tag-sizes 0.30 --focal-ratio-prior
 ```
+
+`retime_for_detector.py` spaces the frame stamps 300 ms apart. The export stamps frames in real time (33 ms apart at 30 fps), and vk_camera_driver runs tag detection at most once per ~250 ms of stamp time, so without this step only every 8th frame gets detected.
 
 ### Flag notes
 
@@ -412,15 +416,17 @@ Healthy: focal within 0.15%, principal point within 0.5 px (a known pixel-conven
 
 ## Step 6 (optional) — look at the detections
 
-The detector embeds the source image in every detection message, so the tags file alone is enough. Note the viewer shows the detected tag quads over a low-resolution intensity layer, not the full rendered photo:
+The detector embeds the source image in every detection message, so the tags file alone is enough. Note the viewer shows the detected tag quads over a low-resolution intensity layer, not the full rendered photo.
+
+`vk_mcap_to_rrd` writes rerun 0.27.2 recordings. Install that viewer in its own venv, in a folder that survives a reboot, so the renderer's rerun-sdk 0.36.3 is not downgraded:
 
 ```bash
 
-pip3 install rerun-sdk==0.20.1
+python3 -m venv ~/venvs/rerun027 && ~/venvs/rerun027/bin/pip install rerun-sdk==0.27.2
 
 vk_mcap_to_rrd ${RUN}_tags.mcap viewer_demo.json -o /tmp/${RUN}.rrd -s 0 -e 15
 
-rerun /tmp/${RUN}.rrd
+~/venvs/rerun027/bin/rerun /tmp/${RUN}.rrd
 ```
 
 > 📷 **PIC 6 — Rerun**, four synchronised camera streams with detections. Scrub to a busy part of the timeline (around +20s) so several cameras have the board in view — each camera only sees it during its own trajectory segment.
@@ -462,7 +468,7 @@ Don't merge the image and tag MCAPs for viewing. Images use a zero-based clock, 
 | Baselines exactly half of truth | solved with `--tag-size 0.15` | re-solve with `0.30` — no re-render needed |
 | Disk full | image MCAPs are 1–11 GB each | delete old ones, keep the tag MCAPs |
 | Garbage result, fy/fx ≈ 1.76 | board not reset — 6 columns instead of 7 | GUI step 3, then re-render |
-| Only two grids detected out of three | one board is outside the sweep, or behind the eye box | Fly to after Build Orbit and look. Move the board so every eye is in front of it and it sits inside the camera's vertical field. |
+| Only two grids detected out of three | one board is outside the sweep, or behind the eye box | Fly to after Build Trajectory and look. Move the board so every eye is in front of it and it sits inside the camera's vertical field. |
 | Two detections in the whole bag, frames look clean, boards visible | **mirrored render**: the camera is behind the boards and sees the tags through them, reversed. tag16h5 cannot decode a mirror image. | never set `ORBIT_FLIP`. Check `eye z` in the orbit log is on the same side of the boards as the origin. |
 | Frames are a beige smear, `std` under 40 | the eye is inside the scene geometry | change `ORBIT_DIST` until Fly to shows the room |
 | Boards at the fisheye edge, few detections | `AIM_SCALE` too large for the distance | lower it. 0.9 for DS at 2.5 m is verified. |
@@ -471,7 +477,7 @@ Don't merge the image and tag MCAPs for viewing. Images use a zero-based clock, 
 | CamA detects almost nothing on the near board | half the eyes are behind that board's plane | move it deeper than the eye box: `pos z -4.85` in v9 |
 | Board renders at double size | reset button pressed in three-grid mode | relaunch. The scene file sizes the boards. |
 | `Orbit failed: No primitive matching` | wrong `ORBIT_TARGET` or no boards spawned | check the `[playground]` startup lines |
-| Fly to shows the origin, not the boards | orbit not built yet | Build Orbit first; it parks the rig at the first pose |
+| Fly to shows the origin, not the boards | orbit not built yet | Build Trajectory (type Orbit) first; it parks the rig at the first pose |
 | Room upside down in Fly to | expected on older checkouts; fixed | the current branch negates the up vector in the preview. The render was never affected. |
 | Empty tags bag, 432 bytes | detector aborted at startup | a declared grid shares adjacency with another (a 3×3 with ids 0..8 collides with `aprilgrid`). Run the detector unfiltered and read its first lines. |
 | Focal 3.4 % off with `ds` | one board plane | three-grid mode, or fit KB4 |
@@ -552,7 +558,7 @@ python playground.py --gs_object ply_files/room.ply
 
 The boards stack vertically 0.99 m apart — the height of a 4x7 board at 15 cm squares plus a 20% gap — so you can resize every board up to 15 cm squares in the GUI and they stay fully visible instead of the near board hiding the far ones. Setting `BOARD_ANGLES` restores the old angular layout, which does overlap at that size.
 
-**Build Orbit Trajectory** frames all boards together in this mode: it orbits the centre of their combined bounding box and pushes the near eye ring out until every board fits the KB4 field of view from every viewpoint. Set `ORBIT_TARGET=<board name>` to orbit a single board the old way; `ORBIT_DIST` and `ORBIT_FLIP` still work as before.
+**Build Trajectory** with type Orbit frames all boards together in this mode: it orbits the centre of their combined bounding box and pushes the near eye ring out until every board fits the KB4 field of view from every viewpoint. Set `ORBIT_TARGET=<board name>` to orbit a single board the old way; `ORBIT_DIST` and `ORBIT_FLIP` still work as before.
 
 ### Scene-JSON mode
 
@@ -634,6 +640,17 @@ Scene `office_scene_v9.json`, the four-camera launch command above, one render, 
 Principal points within 0.9 px on every camera. FOV gate passed on all four. 588 932 corners, 0 of 8 218 poses rejected, 16 of 16 iterations converged.
 
 For CamD the whole projection curve agrees to within 0.26 px: at every angle off the optical axis, the recovered model and the true model place the ray within a quarter pixel of each other, and within 0.03 px inside 50°. That number is smaller than the solver's own reprojection error, so the disagreement is below what the measurement can resolve.
+
+## Rendering for VIO runs
+
+Feeding vk_vio (through vk_camera_driver) takes raw images, not tag detections, and the recipe differs from a calibration render:
+
+* **One board suffices.** VIO tracks corners frame to frame; it doesn't solve intrinsics, so the multi-board scene buys you nothing here.
+* **Start stationary.** Hold the first pose for 2–3 seconds so the estimator can initialise before anything moves.
+* **Translate and rotate.** Pure rotation gives the backend no parallax. The motion should do both.
+* **15–30 fps** is the right frame rate range. Higher wastes render time, lower starves the tracker.
+* **Set `PLAYGROUND_CALIB=calibration_files/<your file>.json` before launching.** The MCAP export then embeds each camera's intrinsics and extrinsics in every image message, which the driver requires — without it the driver silently emits empty flow and VIO sees nothing.
+* The export still writes `mcap_outputs/long_final_path.mcap` and the next render overwrites it — rename immediately, same as step 4.
 
 ## Notes
 

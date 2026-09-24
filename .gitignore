@@ -60,3 +60,4 @@ plot-*.json
 mcap_outputs/
 *.bak
 *.*bak
+.venv-cpu/
