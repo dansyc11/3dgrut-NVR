@@ -17,7 +17,6 @@ import ecal.core.core as ecal_core
 from capnp_subscriber import CapnpSubscriber
 
 # pycapnp version >= 2.0
-sys.path.append(os.path.join(os.path.dirname(__file__), '../vk_sdk/capnp'))
 sys.path.append('/opt/vilota/messages')
 capnp.add_import_hook()
 

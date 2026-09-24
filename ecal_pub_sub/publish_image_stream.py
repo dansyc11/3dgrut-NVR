@@ -17,7 +17,6 @@ sys.path.append('/opt/vilota/python')
 from capnp_publisher import CapnpPublisher
 import capnp
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../vk_sdk/capnp'))
 sys.path.append('/opt/vilota/messages')
 capnp.add_import_hook()
 import cv2

@@ -17,7 +17,6 @@ sys.path.append('/opt/vilota/python')
 from capnp_publisher import CapnpPublisher
 import capnp
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../vk_sdk/capnp'))
 sys.path.append('/opt/vilota/messages')
 capnp.add_import_hook()
 
@@ -38,7 +37,6 @@ from capnp_publisher import CapnpPublisher
 import capnp
 
 # Setup Cap'n Proto import paths
-sys.path.append(os.path.join(os.path.dirname(__file__), '../vk_sdk/capnp'))
 sys.path.append('/opt/vilota/messages')
 capnp.add_import_hook()
 import image_capnp as eCALImage
@@ -58,7 +56,6 @@ import capnp
 import cv2
 
 # Ensure Cap'n Proto imports work
-sys.path.append(os.path.join(os.path.dirname(__file__), '../vk_sdk/capnp'))
 sys.path.append('/opt/vilota/messages')
 capnp.add_import_hook()
 import image_capnp as eCALImage
