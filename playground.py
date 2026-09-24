@@ -21,7 +21,7 @@ import os
 from threedgrut_playground.ps_gui import Playground
 
 
-def run_demo(gs_object, mesh_assets_folder, envmap_assets_folder, default_gs_config, buffer_mode):
+def run_demo(gs_object, mesh_assets_folder, envmap_assets_folder, default_gs_config, buffer_mode, initial_pose=None):
     """
     How to run:
     > python playground.py --gs_object <ckpt_path>
@@ -29,8 +29,16 @@ def run_demo(gs_object, mesh_assets_folder, envmap_assets_folder, default_gs_con
                           [--default_gs_config <config_name>]
                           [--envmap_assets <hdr_folder_path>]
                           [--buffer_mode <host2device | device2device>]
+                          [--initial_pose ex ey ez tx ty tz ux uy uz]
     """
-    playground = Playground(gs_object, mesh_assets_folder, default_gs_config, envmap_assets_folder, buffer_mode)
+    playground = Playground(
+        gs_object,
+        mesh_assets_folder,
+        default_gs_config,
+        envmap_assets_folder,
+        buffer_mode,
+        initial_pose=initial_pose,
+    )
     playground.run()
 
 
@@ -65,6 +73,16 @@ if __name__ == "__main__":
         help="Buffering mode for passing rendered data from CUDA to OpenGL screen buffer."
         "Using device2device is recommended.",
     )
+    parser.add_argument(
+        "--initial_pose",
+        type=float,
+        nargs=9,
+        default=None,
+        metavar=("EX", "EY", "EZ", "TX", "TY", "TZ", "UX", "UY", "UZ"),
+        help="Start the camera at eye (EX EY EZ) looking at target (TX TY TZ) with up (UX UY UZ), "
+        "in world coordinates. Overrides polyscope's home view, which is computed from the "
+        "hardcoded +-1.5 bounding box and not from the loaded scene.",
+    )
     args = parser.parse_args()
 
     run_demo(
@@ -73,4 +91,5 @@ if __name__ == "__main__":
         envmap_assets_folder=args.envmap_assets,
         default_gs_config=args.default_gs_config,
         buffer_mode=args.buffer_mode,
+        initial_pose=args.initial_pose,
     )

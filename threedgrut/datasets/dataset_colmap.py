@@ -413,6 +413,12 @@ class ColmapDataset(Dataset, BoundedMultiViewDataset, DatasetVisualization):
             fov_angle_x = 2.0 * max_radius_pixels / focal_length[0]
             fov_angle_y = 2.0 * max_radius_pixels / focal_length[1]
             max_angle = np.max([fov_angle_x, fov_angle_y]) / 2.0
+            # The corner radius over-budgets max_angle past the lens image
+            # circle (e.g. FIORD 200-deg fisheyes: corner ~134 deg vs 100 deg
+            # half-FOV), widening the 3dgut cull cone (cameraProjections.cuh:
+            # 119,127). Optional clamp; unset leaves all datasets untouched.
+            if (clamp_deg := os.environ.get("FISHEYE_MAX_ANGLE_DEG")) is not None:
+                max_angle = min(max_angle, np.radians(float(clamp_deg)))
 
             params = OpenCVFisheyeCameraModelParameters(
                 principal_point=principal_point,
@@ -715,6 +721,11 @@ class ColmapDataset(Dataset, BoundedMultiViewDataset, DatasetVisualization):
         actual_h, actual_w = image_data.shape[:2]
 
         assert image_data.dtype == np.uint8, "Image data must be of type uint8"
+        if image_data.ndim == 3 and image_data.shape[2] == 4:
+            # RGBA input (e.g. Inria hierarchical-3dgs chunks: alpha masks the
+            # fisheye-rectification border). Drop alpha; TODO route it into
+            # output_dict["mask"], which the loss already supports below.
+            image_data = image_data[:, :, :3]
 
         output_dict = {
             "data": torch.tensor(image_data).unsqueeze(0),

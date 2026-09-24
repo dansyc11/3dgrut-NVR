@@ -645,7 +645,16 @@ class Trainer3DGRUT:
 
         if is_compute_validation_metrics:
             with torch.cuda.nvtx.range("criterions_psnr"):
-                metrics["psnr"] = psnr(rgb_pred, rgb_gt).item()
+                if (mask := gpu_batch.mask) is not None:
+                    # Masked pixels carry no training signal, so the model
+                    # renders arbitrary content there; exclude them from PSNR
+                    # or it reads low for a benign reason. SSIM/LPIPS below
+                    # stay unmasked (window/network metrics, no cheap per-
+                    # pixel exclusion).
+                    mse = (((rgb_pred - rgb_gt) * mask) ** 2).sum() / (mask.sum() * rgb_gt.shape[-1])
+                    metrics["psnr"] = -10.0 * torch.log10(mse).item()
+                else:
+                    metrics["psnr"] = psnr(rgb_pred, rgb_gt).item()
 
             rgb_gt_full = rgb_gt.permute(0, 3, 1, 2)
             pred_features_full = rgb_pred.permute(0, 3, 1, 2)
