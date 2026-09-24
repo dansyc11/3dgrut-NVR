@@ -13,12 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
+from typing import List, Union
 
 import numpy as np
 import polyscope as ps
 import torch
-from kaolin.render.camera import Camera
+
+# from kaolin.render.camera import Camera
+from threedgrut_playground.utils.distortion_camera import DistortionCamera as Camera
 
 """
 This module is to be included in next version of kaolin 0.18.0.
@@ -32,6 +34,12 @@ def polyscope_to_kaolin_camera(
     height: int,
     near: float = 1e-2,
     far: float = 1e2,
+    fx=None,
+    fy=None,
+    cx=None,
+    cy=None,
+    is_vilota: bool = False,
+    distortion_coefficients: List[float] = None,
     device: Union[torch.device, str] = "cpu",
 ) -> Camera:
     """Converts a polyscope camera (polyscope.core.CameraParameters) to kaolin Camera format (kaolin.render.camera.Camera).
@@ -41,10 +49,14 @@ def polyscope_to_kaolin_camera(
 
     Args:
         ps_camera (ps.core.CameraParameters): A polyscope camera object.
+        is_novel_view (bool): If True, the camera will be rendered as a distortion camera
         width (int): Image plane width in pixels.
         height (int): Image plane height in pixels.
         near (optional, float): near clipping plane, defines the min depth of the view frustrum.
         far (optional, float): far clipping plane, define the max depth of the view frustrum.
+        distortion_coefficients (optional, List[float]): Distortion coefficients for the camera. If loaded from calibration file, the distortion
+        camera will have a list of 6 coefficients, which are used to apply double sphere unprojection for ray generation.
+            If None, no distortion is applied. Default: None
         device (optional, torch.device or str): the device on which camera parameters will be allocated. Default: cpu
     Returns:
         (kaolin.render.camera.Camera):
@@ -52,7 +64,7 @@ def polyscope_to_kaolin_camera(
     """
     view_matrix = ps_camera.get_view_mat()
     fov_y = ps_camera.get_fov_vertical_deg() * np.pi / 180.0  # to radians
-    return Camera.from_args(
+    cam = Camera.from_args(
         view_matrix=view_matrix,
         fov=fov_y,
         width=width,
@@ -61,7 +73,24 @@ def polyscope_to_kaolin_camera(
         far=far,
         dtype=torch.float64,
         device=device,
+        distortion_coefficients=distortion_coefficients,
     )
+    if is_vilota:
+        cam = Camera.from_args(
+            view_matrix=view_matrix,
+            width=width,
+            height=height,
+            focal_x=fx,
+            focal_y=fy,
+            x0=cx,
+            y0=cy,
+            dtype=torch.float64,
+            device=device,
+            distortion_coefficients=distortion_coefficients,
+            intrinsic_params=[fx, fy, cx, cy],
+        )
+
+    return cam
 
 
 def polyscope_from_kaolin_camera(camera: Camera) -> ps.core.CameraParameters:

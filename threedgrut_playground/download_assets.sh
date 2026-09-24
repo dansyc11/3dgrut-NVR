@@ -18,6 +18,7 @@
 
 assets=(
     armadillo.obj
+    cheburashka.obj
     xyzrgb_dragon.obj
     beast.obj
     happy.obj
@@ -29,7 +30,7 @@ assets=(
 
 # Source: https://github.com/alecjacobson/common-3d-test-models/blob/master/data
 base_url="https://raw.githubusercontent.com/alecjacobson/common-3d-test-models/master/data"
-output_dir="./threedgrut_playground/assets"
+output_dir="./assets"
 
 if command -v wget > /dev/null; then
     downloader="wget"

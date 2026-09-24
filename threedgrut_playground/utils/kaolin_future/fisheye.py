@@ -13,10 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Optional, Tuple
 
+import numpy as np
 import torch
-from kaolin.render.camera import Camera, generate_centered_pixel_coords
+from kaolin.render.camera import CameraFOV, generate_centered_pixel_coords
+
+from threedgrut_playground.utils.distortion_camera import DistortionCamera as Camera
 
 """
 This module is to be included in next version of kaolin 0.18.0.
@@ -115,9 +119,280 @@ def generate_fisheye_rays(
         .reshape(1, 1, 1, 3)
         .expand(1, camera.height, camera.width, 3)
     )
+    #
 
     rays_ori = rays_ori.reshape(-1, 3)
+
     rays_dir = rays_dir.reshape(-1, 3)
     out_of_fov_mask = out_of_fov_mask.reshape(-1, 1)
 
     return rays_ori, rays_dir, out_of_fov_mask
+
+
+def generate_fisheye_rays_double_sphere(
+    camera: Camera,
+    distortion_params: list[float],  # [fx, fy, cx, cy, xi, alpha]
+    coords_grid: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    eps: float = 1e-9,
+):
+    """Double-sphere fisheye ray generation (camera-to-world, like pinhole rays).
+
+    Args:
+        camera: a batch of 1 camera (with attributes width, height, device, dtype, cam_pos(), etc.).
+        distortion_params: [fx, fy, cx, cy, xi, alpha].
+        coords_grid: optional (y_grid, x_grid) of shape (H, W), giving pixel coordinates (in image pixel units).
+        eps: small epsilon to avoid div/zero.
+
+    Returns:
+        rays_ori: (H*W, 3), all origins (camera center).
+        rays_dir: (H*W, 3), unit directions in world space.
+        out_of_fov_mask: (H*W, 1) bool mask, True = outside FOV.
+    """
+    assert len(camera) == 1, "generate_fisheye_rays_double_sphere supports only camera input of batch size 1"
+    if coords_grid is None:
+        coords_grid = generate_centered_pixel_coords(camera.width, camera.height, device=camera.device)
+    else:
+        assert camera.device == coords_grid[0].device, (
+            f"Expected camera and coords_grid[0] to be on the same device, "
+            f"but found {camera.device} and {coords_grid[0].device}."
+        )
+        assert camera.device == coords_grid[1].device, (
+            f"Expected camera and coords_grid[1] to be on the same device, "
+            f"but found {camera.device} and {coords_grid[1].device}."
+        )
+
+    pixel_y, pixel_x = coords_grid
+    pixel_x = pixel_x.to(camera.device, camera.dtype)
+    pixel_y = pixel_y.to(camera.device, camera.dtype)
+
+    fx, fy, cx, cy, xi, alpha = distortion_params[5:11]
+    # fx, fy, cx, cy = camera.get_camera_intrinsics()
+    # fx, fy = 614.8464965820313, 613.5963134765625
+
+    # Compute normalized image coordinates (m_x, m_y)
+    m_x = (pixel_x - cx) / fx
+    m_y = (pixel_y - cy) / fy
+
+    r2 = (m_x * m_x) + (m_y * m_y)
+    r = torch.sqrt(r2)
+
+    # Double sphere model unprojection (see Usenko et al., 2018)
+    numerator = 1.0 - ((alpha * alpha) * r2)
+    inside = 1 - ((2 * alpha - 1) * r2)
+    denominator = alpha * torch.sqrt(torch.clamp(inside, min=0.0)) + 1 - alpha
+    m_z = torch.where(denominator.abs() > eps, numerator / denominator, 0.0)
+    # m_z = torch.clamp(m_z, min=-1.0, max=1.0)
+
+    # Unprojection scalar
+    scalar_numerator = m_z * xi + torch.sqrt((m_z * m_z) + (1 - xi * xi) * r2)
+    scalar_denominator = m_z * m_z + r2
+    scalar = torch.where(scalar_denominator.abs() > eps, scalar_numerator / scalar_denominator, 0.0)
+
+    # Camera-space direction
+    rays_dir = torch.stack([m_x * scalar, -m_y * scalar, -m_z * scalar], dim=-1)  # (H, W, 3)
+
+    rays_dir = rays_dir.reshape(-1, 3)  # shape (H*W, 3)
+    xi_shift = torch.tensor([0.0, 0.0, xi], device=rays_dir.device, dtype=rays_dir.dtype)
+    xi_shift = xi_shift.view(1, 3)  # shape (1, 3)
+    # z-convention is opposite of the formulation in the paper so xi shift is added
+    rays_dir = rays_dir + xi_shift
+
+    ray_dir = rays_dir.reshape(-1, 3)
+    ray_orig = torch.zeros_like(ray_dir)
+
+    # Normalize direction
+    ray_dir = ray_dir / torch.linalg.norm(ray_dir, dim=-1, keepdim=True)
+    # Transform from camera to world coordinates
+    ray_orig, ray_dir = camera.extrinsics.inv_transform_rays(ray_orig, ray_dir)
+
+    # Out-of-FOV mask: mask points where denominator or inside sqrt is invalid, or r is too large
+    out_of_fov_mask = (inside < 0) | (denominator.abs() <= eps) | (scalar_denominator.abs() <= eps) | (r > 5.0)
+    out_of_fov_mask = out_of_fov_mask.reshape(-1, 1)
+
+    return ray_orig, ray_dir, out_of_fov_mask
+
+
+def generate_pinhole_rays(
+    camera: Camera,
+    coords_grid: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+):
+    """Kaolin-math-matching pinhole ray generation."""
+    assert len(camera) == 1, "generate_pinhole_rays supports only camera input of batch size 1"
+    if coords_grid is None:
+        coords_grid = generate_centered_pixel_coords(camera.width, camera.height, device=camera.device)
+    else:
+        assert camera.device == coords_grid[0].device, (
+            f"Expected camera and coords_grid[0] to be on the same device, "
+            f"but found {camera.device} and {coords_grid[0].device}."
+        )
+        assert camera.device == coords_grid[1].device, (
+            f"Expected camera and coords_grid[1] to be on the same device, "
+            f"but found {camera.device} and {coords_grid[1].device}."
+        )
+
+    pixel_y, pixel_x = coords_grid
+    pixel_x = pixel_x.to(camera.device, camera.dtype)
+    pixel_y = pixel_y.to(camera.device, camera.dtype)
+
+    pixel_x = pixel_x - camera.x0
+    pixel_y = pixel_y + camera.y0
+
+    # follow kaolin
+    pixel_x = 2 * (pixel_x / camera.width) - 1.0
+    pixel_y = 2 * (pixel_y / camera.height) - 1.0
+
+    # Scale by tangent of half FOV
+    ray_dir = torch.stack(
+        (
+            pixel_x * camera.tan_half_fov(CameraFOV.HORIZONTAL),
+            -pixel_y * camera.tan_half_fov(CameraFOV.VERTICAL),
+            -torch.ones_like(pixel_x),
+        ),
+        dim=-1,
+    )
+
+    ray_dir = ray_dir.reshape(-1, 3)
+    ray_orig = torch.zeros_like(ray_dir)
+
+    # Normalize direction
+    ray_dir = ray_dir / torch.linalg.norm(ray_dir, dim=-1, keepdim=True)
+    # Transform from camera to world coordinates
+    ray_orig, ray_dir = camera.extrinsics.inv_transform_rays(ray_orig, ray_dir)
+
+    return ray_orig, ray_dir
+
+
+def estimate_theta_star(
+    k1,
+    k2,
+    k3,
+    k4,
+    ru: torch.Tensor,
+    # theta_range = (0.0, 180.0),
+    step_size=0.001,
+    device=None,
+    dtype=None,
+):
+    """
+    Helper function with implementation of Lut to compute
+    theta_star = d_inverse(ru)
+    """
+    # start, end = theta_range[0], theta_range[1]
+
+    num_steps = int((math.pi - 0.0) / step_size)
+    theta_vals = torch.linspace(0.0, math.pi, steps=num_steps, device=device, dtype=dtype)
+    d = lambda theta: theta + k1 * theta**2 + k2 * theta**5 + k3 * theta**7 + k4 * theta**9
+    R = d(theta_vals)  # (num_steps,)
+
+    # ru: (...), need to find theta_star for each ru
+    # Use torch.searchsorted (PyTorch >= 1.6)
+    # ru_clamped = torch.clamp(ru, R[0], R[-1])
+    idx = torch.searchsorted(R, ru) - 1
+    idx = torch.clamp(idx, 0, len(R) - 2)
+
+    r0 = R[idx]
+    r1 = R[idx + 1]
+    theta0 = theta_vals[idx]
+    theta1 = theta_vals[idx + 1]
+
+    theta_star = theta0 + (ru - r0) * (theta1 - theta0) / (
+        r1 - r0 + 1e-12
+    )  # interpolate to get the theta in between by that ratio
+
+    return theta_star
+
+
+def kb4_max_radius(k1, k2, k3, k4, steps=4096):
+    """Largest normalised radius r = d(theta) the KB4 model can invert.
+
+    d(theta) = theta * (1 + k1 theta^2 + k2 theta^4 + k3 theta^6 + k4 theta^8) is inverted on
+    [0, pi] up to where it stops increasing; beyond that radius a pixel has no ray.
+    """
+    theta = torch.linspace(0.0, math.pi, steps=steps, dtype=torch.float64)
+    t2 = theta * theta
+    d = theta * (1 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4))))
+    falling = torch.nonzero(d[1:] <= d[:-1])
+    last = int(falling[0]) if len(falling) else steps - 1
+    return float(d[last])
+
+
+def generate_rays_kb4(
+    camera: Camera,
+    distortion_params: list[float],
+    coords_grid: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    eps: float = 1e-9,
+):
+    """KB4 raygen
+
+    Args:
+        camera: a batch of 1 camera (with attributes width, height, device, dtype, cam_pos(), etc.).
+        distortion_params: full list of distortion params ( slice to get first 4 kb4)
+        coords_grid: optional (y_grid, x_grid) of shape (H, W), giving pixel coordinates (in image pixel units).
+        eps: small epsilon to avoid div/zero.
+
+    Returns:
+        rays_ori: (H*W, 3), all origins (camera center).
+        rays_dir: (H*W, 3), unit directions in camera space.
+        out_of_fov_mask: (H*W, 1) bool mask, True = outside FOV.
+    """
+    assert len(camera) == 1, "generate_rays_kb4() supports only camera input of batch size 1"
+    if coords_grid is None:
+        coords_grid = generate_centered_pixel_coords(camera.width, camera.height, device=camera.device)
+    else:
+        assert camera.device == coords_grid[0].device, (
+            f"Expected camera and coords_grid[0] to be on the same device, "
+            f"but found {camera.device} and {coords_grid[0].device}."
+        )
+
+        assert camera.device == coords_grid[1].device, (
+            f"Expected camera and coords_grid[1] to be on the same device, "
+            f"but found {camera.device} and {coords_grid[1].device}."
+        )
+
+    # Unpack = params
+    k1, k2, k3, k4 = distortion_params[:4]
+    # k1, k2, k3, k4 = [0.0]*4
+
+    fx, fy, cx, cy = camera.get_camera_intrinsics()
+    # fx, fy, cx, cy = camera.get_camera_intrinsics()
+    # import sys
+    # fx, fy, cx, cy, k1, k2, k3, k4 = [614.8464965820313, 613.5963134765625, 939.4267578125, 585.2528076171875, -3.0282579245977104e-05,
+    #                 0.0002524006995372474,
+    #                 0.0007139311637729406,
+    #                 -9.387189493281767e-05,]
+    # fx, fy, cx, cy = distortion_params[-4:]
+    pixel_y, pixel_x = coords_grid
+    pixel_x = pixel_x.to(camera.device, camera.dtype)
+    pixel_y = pixel_y.to(camera.device, camera.dtype)
+
+    pixel_x = pixel_x - cx
+    pixel_y = pixel_y - cy
+
+    m_x = (pixel_x) / fx
+    m_y = (pixel_y) / fy
+
+    # Calculate r^2
+    r2 = (m_x * m_x) + (m_y * m_y)
+    r2 = torch.clamp(r2, min=0.0)
+    ru = torch.sqrt(r2)
+
+    theta_star = estimate_theta_star(k1, k2, k3, k4, ru=ru, device=ru.device, dtype=ru.dtype)
+    theta_star = ru
+
+    sin_t = torch.sin(theta_star)
+    cos_t = torch.cos(theta_star)
+
+    rays_dir = torch.stack([sin_t * (m_x / ru), -sin_t * (m_y / ru), -cos_t], dim=-1)
+
+    ray_dir = rays_dir.reshape(-1, 3)
+    ray_orig = torch.zeros_like(ray_dir)
+
+    # Normalize direction
+    ray_dir = ray_dir / torch.linalg.norm(ray_dir, dim=-1, keepdim=True)
+    # Transform from camera to world coordinates
+    ray_orig, ray_dir = camera.extrinsics.inv_transform_rays(ray_orig, ray_dir)
+
+    # Pixels past the radius KB4 can invert have no ray; True = outside FOV, as for the other models
+    out_of_fov_mask = (ru > kb4_max_radius(k1, k2, k3, k4)).reshape(-1, 1)
+
+    return ray_orig, ray_dir, out_of_fov_mask

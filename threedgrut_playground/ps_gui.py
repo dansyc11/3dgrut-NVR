@@ -16,22 +16,33 @@
 from __future__ import annotations
 
 import copy
+import csv
+import json
+import math
 import os
+import sys
 import traceback
+from typing import List
 
 import kaolin
 import numpy as np
 import polyscope as ps
 import polyscope.imgui as psim
 import torch
+import tqdm
+from mcap.writer import Writer
+from tqdm import trange
 
 from threedgrut.gui.ps_extension import initialize_cugl_interop
 from threedgrut.utils.logger import logger
 from threedgrut_playground.engine import Engine3DGRUT, OptixPrimitiveTypes
+from threedgrut_playground.utils.distortion_camera import DistortionCamera
 from threedgrut_playground.utils.kaolin_future.conversions import (
     polyscope_from_kaolin_camera,
     polyscope_to_kaolin_camera,
 )
+from threedgrut_playground.utils.mcap_convertor import McapConverter
+from threedgrut_playground.utils.novel_view_renderer import NovelViewRenderer
 from threedgrut_playground.utils.video_out import VideoRecorder
 
 #################################
@@ -49,8 +60,11 @@ class Playground:
         self.scene_mog = self.engine.scene_mog
         self.primitives = self.engine.primitives
         self.video_recorder = self.engine.video_recorder
-        self.video_h = 1080
-        self.video_w = 1920
+        self.novel_view_renderer = self.engine.novel_view_renderer
+        self.mcap_convertor = McapConverter()
+        self.video_h = 800
+        self.video_w = 1280
+        self.selected_pose_idx = 0
 
         """ When this flag is toggled on, the state of the canvas have changed and it needs to be re-rendered """
         self.is_running = True
@@ -70,6 +84,8 @@ class Playground:
         self.viz_render_scalar_buffer = None
         self.viz_render_name = "render"
         self.viz_render_enabled = True
+        self.selected_camera_idx = None
+        self.distortions = None  # Distortion coefficients for the camera, if any
 
         self.slice_planes = self.slice_plane_enabled = self.slice_plane_pos = self.slice_plane_normal = None
         self.init_polyscope(buffer_mode)
@@ -101,8 +117,8 @@ class Playground:
         ps.set_max_fps(-1)
         ps.set_background_color((0.0, 0.0, 0.0))
         ps.set_ground_plane_mode("none")
-        ps.set_window_resizable(True)
-        ps.set_window_size(1920, 1080)
+        ps.set_window_resizable(False)
+        ps.set_window_size(1280, 800)
         ps.set_give_focus_on_show(True)
         ps.set_automatically_compute_scene_extents(False)
         ps.set_bounding_box(np.array([-1.5, -1.5, -1.5]), np.array([1.5, 1.5, 1.5]))
@@ -137,16 +153,21 @@ class Playground:
 
     @torch.cuda.nvtx.range("render_from_current_ps_view")
     @torch.no_grad()
-    def render_from_current_ps_view(self, window_w=None, window_h=None):
+    def render_from_current_ps_view(self, window_w=None, window_h=None, distortion=None):
         """Render a frame using the polyscope gui camera and window size"""
         if window_w is None or window_h is None:
             window_w, window_h = ps.get_window_size()
+        if self.novel_view_renderer.is_loaded():
+            camera = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
+            window_w, window_h = camera.width, camera.height
 
+        ps.set_window_size(window_w, window_h)
         # Update polyscope camera with params from gui
         view_params = ps.CameraParameters(
             ps.CameraIntrinsics(fov_vertical_deg=self.engine.camera_fov, aspect=window_w / window_h),
             ps.get_view_camera_parameters().get_extrinsics(),
         )
+
         ps.set_view_camera_parameters(view_params)
 
         # If window size changed since the last render call, mark the canvas as dirty.
@@ -156,7 +177,24 @@ class Playground:
             if (last_window_size[0] != window_h) or (last_window_size[1] != window_w):
                 self.is_force_canvas_dirty = True
 
-        camera = polyscope_to_kaolin_camera(view_params, window_w, window_h, device=self.engine.device)
+        camera = polyscope_to_kaolin_camera(
+            view_params, window_w, window_h, distortion_coefficients=distortion, device=self.engine.device
+        )
+        if self.novel_view_renderer.is_loaded() and self.selected_camera_idx is not None:
+            fx, fy, cx, cy = self.novel_view_renderer.get_camera_intrinsics_at_index(self.selected_camera_idx)
+            camera = polyscope_to_kaolin_camera(
+                view_params,
+                window_w,
+                window_h,
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                distortion_coefficients=distortion,
+                device=self.engine.device,
+                is_vilota=True,
+            )
+
         is_first_pass = self.is_dirty(camera)
         if not is_first_pass and not self.engine.has_progressive_effects_to_render():
             return self.engine.last_state["rgb"], self.engine.last_state["opacity"]
@@ -179,9 +217,19 @@ class Playground:
         """Renders a single pass using the polyscope camera and updates the polyscope canvas buffers
         with rendered information.
         """
-        window_w, window_h = ps.get_window_size()
+        # Get the current kaolin cam hfov and vfov
 
-        # re-initialize if needed
+        if self.novel_view_renderer.is_loaded():
+            camera = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
+            window_w, window_h = camera.width, camera.height
+        else:
+            window_w, window_h = ps.get_window_size()
+        if self.distortions:
+            distortions = self.distortions[self.selected_camera_idx] if self.selected_camera_idx is not None else None
+            # if distortions[5] == 0.0:
+            #     intrinsics = self.novel_view_renderer.get_camera_intrinsics_at_index(self.selected_camera_idx)
+            #     distortions = distortions + intrinsics
+
         style = self.viz_render_styles[self.viz_render_style_ind]
         if (
             force
@@ -226,7 +274,9 @@ class Playground:
 
         # do the actual rendering
         try:
-            sple_orad, sple_odns = self.render_from_current_ps_view()
+            sple_orad, sple_odns = self.render_from_current_ps_view(
+                distortion=distortions if self.distortions else None
+            )
             sple_orad = sple_orad[0]
             sple_odns = sple_odns[0]
         except Exception:
@@ -395,6 +445,17 @@ class Playground:
             )
             self.is_force_canvas_dirty = self.is_force_canvas_dirty or settings_changed
 
+            psim.Text("Camera Coordinates:")
+            camera = ps.get_view_camera_parameters()
+            camera_pos = camera.get_position()
+            camera_rot = camera.get_R()
+            psim.PushItemWidth(100)
+            # psim.Text(f"Position: [{camera_pos[0]:.2f}, {camera_pos[1]:.2f}, {camera_pos[2]:.2f}]")
+            # psim.Text(f"Rotation: {camera_rot}")
+            curr_view_mat = camera.get_view_mat()
+            curr_six6of = self.novel_view_renderer.convert_view_matrix_to_6dof_pose(curr_view_mat)
+            psim.Text(f"6DOF:{str(curr_six6of)}")
+
             psim.PopItemWidth()
             psim.TreePop()
 
@@ -474,17 +535,25 @@ class Playground:
                 "Video Output Path", self.video_recorder.trajectory_output_path
             )
             if psim.Button("Add Camera"):
-                camera = polyscope_to_kaolin_camera(
-                    ps.get_view_camera_parameters(), width=self.video_w, height=self.video_h
-                )
-                self.video_recorder.add_camera(camera)
+                if self.selected_camera_idx is None:
+                    ps.warning("Please select a camera first.")
+                else:
+                    self.add_cam_to_vid_recorder(self.selected_camera_idx)
+                # view_mat, sixdof_pose, view_mat_string = self.get_view_matrix_and_pose()
+                # self.save_pose_to_csv(view_mat, sixdof_pose, view_mat_string, csv_filename="video_trajectory.csv")
+
             psim.SameLine()
             if psim.Button("Reset"):
                 self.video_recorder.reset_trajectory()
             psim.SameLine()
             if psim.Button("Render Video"):
                 try:
-                    self.video_recorder.render_video()
+                    if self.novel_view_renderer.is_loaded() and self.selected_camera_idx is not None:
+                        idx = self.selected_camera_idx
+                        cam_name = self.novel_view_renderer.get_cam_name_at_index(idx)
+                    self.video_recorder.render_video(
+                        cam_name=cam_name if self.novel_view_renderer.is_loaded() else None
+                    )
                 except ValueError as e:  # Catch and display any warnings for incorrect input
                     ps.warning(f"{e}")
 
@@ -542,6 +611,325 @@ class Playground:
 
             psim.PopItemWidth()
             psim.TreePop()
+
+    def add_cam_to_vid_recorder(self, index):
+        fx, fy, cx, cy = self.novel_view_renderer.get_camera_intrinsics_at_index(index)
+        cam = self.novel_view_renderer.get_camera_at_index(index)
+        cam_w, cam_h = cam.width, cam.height
+        ps_cam_params = polyscope_from_kaolin_camera(cam)
+        camera = polyscope_to_kaolin_camera(
+            ps_cam_params,
+            width=cam_w,
+            height=cam_h,
+            distortion_coefficients=(
+                self.distortions[self.selected_camera_idx] if self.selected_camera_idx is not None else None
+            ),
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+        )
+        camera.set_cam_intr(fx, fy, cx, cy)
+        self.video_recorder.add_camera(camera)
+
+    def _draw_novel_view_from_calib_controls(self):
+        """Draws a widget to render novel views from a camera calibration file. User can fly to different camera views in
+        the unit to see how the simulated view from that particular Vilota device looks"""
+        psim.SetNextItemOpen(False, psim.ImGuiCond_FirstUseEver)
+
+        # Add a persistent status message attribute if not present
+        if not hasattr(self, "_novel_view_calib_status"):
+            self._novel_view_calib_status = ""
+
+        # Add an attribute for successfully loaded calibration
+        if not hasattr(self, "calibration_loaded"):
+            self.calibration_loaded = False
+
+        if not hasattr(self, "_trajectory_status"):
+            self._trajectory_status = "Trajectory not loaded"
+
+        if psim.TreeNode("Novel View from Vilota Calibration file"):
+            # psim.Text("Place your calibration file into a folder called ./calibrations")
+
+            _, self.novel_view_renderer.calibration_filename = psim.InputText(
+                "Calibration Path (relative to root)", self.novel_view_renderer.calibration_filename
+            )
+            self.novel_view_renderer.set_filepath()
+            calibration_path = self.novel_view_renderer.calibration_fullpath
+            psim.Text(f"Calibration file will be loaded from:{calibration_path}")
+
+            # Disable "Load Calibration" button if calibration is already loaded
+            psim.BeginDisabled(self.calibration_loaded == True)
+            if psim.Button("Load Calibration"):
+                try:
+                    self.novel_view_renderer.load_device()
+                    self.calibration_loaded = True  # Set the flag to indicate that calibration is loaded
+                    self._novel_view_calib_status = (
+                        f"Loaded {self.novel_view_renderer.get_camera_count()} cameras from {calibration_path}"
+                    )
+                    self.distortions = self.novel_view_renderer.get_cam_distortions()
+                except FileNotFoundError as e:
+                    self._novel_view_calib_status = f"Calibration file not found. \nPlease make sure that file exists."
+                    import traceback
+
+                    traceback.print_exc()
+                except ValueError as e:
+                    self._novel_view_calib_status = f"{e}"
+                    import traceback
+
+                    traceback.print_exc()
+                except Exception as e:
+                    self._novel_view_calib_status = f"{e}"
+                    import traceback
+
+                    traceback.print_exc()
+
+            psim.EndDisabled()
+
+            if self.novel_view_renderer.is_loaded():
+                psim.SameLine()
+                if psim.Button("Reload Calibration"):
+                    try:
+                        self.selected_camera_idx = None
+                        self.calibration_loaded = False  # Reset the flag to allow reloading
+                        self.novel_view_renderer.load_device(reload=True)
+                        self._novel_view_calib_status = (
+                            f"Reloaded {self.novel_view_renderer.get_camera_count()} cameras from {calibration_path}"
+                        )
+                        self.distortions = self.novel_view_renderer.get_cam_distortions()
+                        self.calibration_loaded = True  # Set the flag to indicate that the device is loaded
+                    except FileNotFoundError as e:
+                        self._novel_view_calib_status = (
+                            f"Calibration file not found. \nPlease make sure that file exists."
+                        )
+                    except ValueError as e:
+                        self._novel_view_calib_status = f"{e}"
+                    except Exception as e:
+                        self._novel_view_calib_status = f"{e}"
+            # Always display the status message if present
+            if self._novel_view_calib_status:
+                psim.Text(self._novel_view_calib_status)
+
+            if getattr(self, "selected_camera_idx", None) is None:
+                # If no camera is selected, select the first one by default
+                self.selected_camera_idx = 0
+            if getattr(self, "trajectory_loaded", None) is None:
+                self.trajectory_loaded = False
+
+            if getattr(self, "poses", None) is None:
+                # Initialize poses_list if it doesn't exist
+                self.poses = []
+
+            if getattr(self, "export_cam_index", None) is None:
+                # Initialize export_cam_index if it doesn't exist
+                self.export_cam_index = 0
+
+            # If calibration is loaded, show all controls
+            if self.calibration_loaded:
+                if psim.TreeNode("Device loaded"):
+                    psim.Text(self.novel_view_renderer.get_device_name_and_serial_no())
+                    for idx, (camera) in self.novel_view_renderer.get_all_cameras().items():
+                        # Draw a button to select this camera
+                        if psim.Button(f"Select {self.novel_view_renderer.get_cam_name_at_index(idx)}"):
+                            self.selected_camera_idx = idx
+                            psim.SameLine()
+                            self._draw_single_vk_cam(idx, camera)
+                        elif self.selected_camera_idx == idx:
+                            psim.SameLine()
+                            self._draw_single_vk_cam(idx, camera)
+                    psim.Text(f"Origin camera = {self.novel_view_renderer.get_origin_camera_index()}")
+
+                if psim.TreeNode("Save/Load Video trajectory"):
+                    if self._trajectory_status:
+                        psim.Text(self._trajectory_status)
+                    _, self.novel_view_renderer.trajectory_filename = psim.InputText(
+                        "Trajectory filename (in ./video_trajectories)", self.novel_view_renderer.trajectory_filename
+                    )
+                    if not self.trajectory_loaded and psim.Button("Load Trajectory"):
+                        try:
+                            self.novel_view_renderer.set_trajectory_filepath()
+                            self.poses = self.novel_view_renderer.get_trajectory_poses()
+                            self.trajectory_loaded = True  # Set the flag to indicate that the trajectory is loaded
+                        except FileNotFoundError as e:
+                            self._trajectory_status = f"Trajectory file not found. \nPlease make sure that file exists."
+                        except ValueError as e:
+                            self._trajectory_status = f"{e}"
+                        except Exception as e:
+                            self._trajectory_status = f"{e}"
+                    psim.SameLine()
+                    if psim.Button("Create New Trajectory"):
+                        self.poses = self.novel_view_renderer.create_new_trajectory()
+                        self._trajectory_status = "Created a new trajectory. Add poses to it."
+                        self.trajectory_loaded = True
+
+                    if self.trajectory_loaded:
+                        if psim.Button("Add current view to trajectory"):
+                            current_cam_params = ps.get_view_camera_parameters()
+                            current_cam_view_mat = current_cam_params.get_view_mat()
+                            curr_cam_index = self.selected_camera_idx
+                            self.poses = self.novel_view_renderer.add_pose_to_trajectory(
+                                current_cam_view_mat, curr_cam_index
+                            )
+                        if psim.TreeNode(f"Trajectory: {len(self.poses)} poses"):
+                            _, self.export_cam_index = psim.SliderInt(
+                                "Choose Cam",
+                                self.export_cam_index,
+                                v_min=0,
+                                v_max=self.novel_view_renderer.get_camera_count() - 1,
+                            )
+
+                            psim.NewLine()
+                            if psim.Button("Render Current Cam Trajectory PNGS"):
+                                self.video_recorder.export_format = "png"
+                                self.populate_vid_trajectory(self.poses, self.export_cam_index)
+                                cam_name = self.novel_view_renderer.get_cam_name_at_index(self.export_cam_index)
+                                self.video_recorder.render_video(
+                                    cam_name=cam_name if self.novel_view_renderer.is_loaded() else None
+                                )
+                            psim.SameLine()
+                            if psim.Button("Render Device Trajectory MCAP"):
+                                self.render_mcap_trajectory(self.poses)
+                            psim.NewLine()
+                            psim.Text(f"Cam {self.export_cam_index} to render.")
+                            poses_list = self.novel_view_renderer.get_trajectory_poses()
+                            self.poses = poses_list
+                            self._draw_cam_trajectory_view(self.poses)
+
+                    psim.TreePop()
+
+            # if self.calibration_loaded:
+            #     origin = self.novel_view_renderer.get_origin_camera_index()
+            #     if self.calibration_loaded and self.selected_camera_idx == origin and psim.Button("Save World to Cam D"):
+            #         cam_d_view_matrix = ps.get_camera_view_matrix()
+            #         self.novel_view_renderer.world_to_camd = cam_d_view_matrix
+            #         print(f"Saved world to cam D view matrix: {cam_d_view_matrix}")
+
+            #     if len(self.novel_view_renderer.world_to_camd) != 0 and self.selected_camera_idx != origin and psim.Button("Save world to cam i"):
+            #         cam_i_view_matrix = ps.get_camera_view_matrix()
+            #         self.novel_view_renderer.world_to_cami = cam_i_view_matrix
+            #         self.novel_view_renderer.i = self.selected_camera_idx
+            #         print(f"Saved world to cam {self.novel_view_renderer.i} view matrix : {self.novel_view_renderer.world_to_cami}")
+
+            #     if len(self.novel_view_renderer.world_to_camd) != 0 and len(self.novel_view_renderer.world_to_cami) != 0 and psim.Button("Check rig layout"):
+            #         self.novel_view_renderer.check_rig_layout()
+
+            # if getattr(self, "scene_center", None) is None:
+            #     # If no center is defined, select this by default
+            #     self.scene_center = [0.999029278755188, 0.00626010866835713, 0.043603427708149, 0.0137977302074432,
+            #                          0.00638079596683383, -0.99997615814209, -0.00262921908870339, -0.265371531248093,
+            #                          0.0435859337449074, 0.00290489150211215, -0.999045491218567, 2.19675970077515,
+            #                          0.0, 0.0, 0.0, 1.0]
+
+            # if self.calibration_loaded and psim.Button("Register New Scene Center"):
+            #     view_mat, sixdof_pose, view_mat_string = self.get_view_matrix_and_pose()
+            #     print(f"View matrix: {view_mat}")
+            #     self.save_pose_to_csv(view_mat, sixdof_pose, view_mat_string)
+            #     print(f"6DOF pose: {sixdof_pose}")
+
+            # psim.SameLine()
+
+            # if self.calibration_loaded and psim.Button("Move to Scene center"):
+            #     if hasattr(self, "scene_center") and self.scene_center is not None:
+            #         # Move the camera to the saved scene center
+            #         index = self.selected_camera_idx
+            #         self.novel_view_renderer.move_rig_to_pose(self.scene_center,cam_index= index, is_6dof=False)
+
+            #     cam = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
+            #     view_params = polyscope_from_kaolin_camera(cam)
+            #     eye = view_params.get_position()
+            #     target = view_params.get_position() + view_params.get_look_dir()
+            #     up = view_params.get_up_dir()
+            #     ps.look_at_dir(eye, target, up, fly_to=True)
+
+            # #set indicator for trajectory loaded
+            # if getattr(self, "trajectory_loaded", None) is None:
+            #     self.trajectory_loaded = False
+
+            # if getattr(self, "poses_list", None) is None:
+            #     self.poses_list = []
+
+            # _, self.novel_view_renderer.trajectory_filename = psim.InputText(
+            #     "Trajectory filename (in ./calibration_files/trajectories)",
+            #     self.novel_view_renderer.trajectory_filename
+            # )
+
+            # self.novel_view_renderer.set_trajectory_filepath()
+            # trajectory_path = self.novel_view_renderer.trajectory_fullpath
+            # psim.Text(f"Trajectory file will be loaded from:\n{trajectory_path}")
+
+            # if self.calibration_loaded and psim.TreeNode("Load Trajectory"):
+            #     if psim.Button("Load Trajectory"):
+            #         self.trajectory_loaded = True
+            #         poses_list = self.novel_view_renderer.get_trajectory_poses()
+            #         self.poses_list = poses_list
+            #         psim.Text(f"Loaded {len(poses_list)} poses from the trajectory.")
+            #     if self.trajectory_loaded:
+            #         self._draw_cam_trajectory_view(self.poses_list)
+
+            # if self.calibration_loaded and psim.TreeNode("Move device to pose"):
+            #     psim.Text("Enter your 6DOF pose (angles in degrees):")
+            #     # Persist pose values as an attribute so they don't reset every frame
+            #     if not hasattr(self, "_move_pose_values"):
+            #         self._move_pose_values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            #     labels = ["x", "y", "z", "Roll", "Pitch", "Yaw"]
+            #     changed_any = False
+            #     for i, label in enumerate(labels):
+            #         changed, value = psim.InputFloat(label, self._move_pose_values[i])
+            #         if changed:
+            #             self._move_pose_values[i] = value
+            #             changed_any = True
+            #     if psim.Button("Set 6dof pose"):
+            #         pose = self._move_pose_values.copy()
+            #         self.novel_view_renderer.move_rig_to_pose(pose)
+            #         cam = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
+            #         view_params = polyscope_from_kaolin_camera(cam)
+            #         eye = view_params.get_position()
+            #         target = view_params.get_position() + view_params.get_look_dir()
+            #         up = view_params.get_up_dir()
+            #         ps.look_at_dir(eye, target, up, fly_to=True)
+
+            psim.PopItemWidth()
+            psim.TreePop()
+
+    def populate_vid_trajectory(self, poses_list, idx=None):
+        """Populates the video recorder trajectory with poses from the provided list.
+           Moves rig to each pose and adds the camera view to the video recorder to
+           be interpolated later.
+        Args:
+           poses_list (list): List of poses to populate the video recorder with (from
+           origin camera, since all trajectories are saved as origin camera/body poses )
+           idx (int, optional): Camera index to use for the poses. If None, uses
+               the currently selected camera index.
+        """
+        self.video_recorder.trajectory = []
+        if idx is None:
+            idx = self.selected_camera_idx
+        for pose in poses_list:
+            self.novel_view_renderer.move_rig_to_pose(pose, is_6dof=True)
+            self.add_cam_to_vid_recorder(idx)
+
+    # def save_pose_to_csv(self, view_mat, sixdof_pose, view_mat_string, csv_filename="new_scene_center.csv"):
+    #     csv_path = "./trajectories/" + csv_filename
+    #     # Ensure sixdof_pose is a flat list or tuple of 6 values
+    #     if sixdof_pose is not None and len(sixdof_pose) == 6:
+    #         file_exists = os.path.isfile(csv_path)
+    #         with open(csv_path, "a", newline='') as f:
+    #             writer = csv.writer(f)
+    #             if not file_exists:
+    #                 writer.writerow(["x", "y", "z", "roll", "pitch", "yaw"])
+    #             writer.writerow(sixdof_pose)
+    #     psim.Text(f"6DOF pose: {sixdof_pose}")
+
+    # def get_view_matrix_and_pose(self):
+    #     params_string = ps.get_view_as_json()
+    #     params_json = json.loads(params_string)
+    #             # Grab the view matrix
+    #     view_mat = params_json.get("viewMat", None)
+    #     self.scene_center = view_mat if view_mat is not None else self.scene_center
+    #     self.novel_view_renderer.center_view_matrix = self.scene_center
+    #     sixdof_pose = self.novel_view_renderer.convert_scene_center_to_6dof_pose()
+    #     view_mat_string = str(view_mat) if view_mat is not None else None
+    #     return view_mat,sixdof_pose,view_mat_string
 
     def _draw_slice_plane_controls(self):
 
@@ -952,56 +1340,80 @@ class Playground:
             object_transform = obj.transform
             transform_changed = False
             psim.PushItemWidth(100)  # button_width
-            if psim.Button("Reset"):
+            # if psim.Button("Reset"):
+            #     object_transform.reset()
+            #     transform_changed = True
+            # psim.PopItemWidth()
+            if psim.Button("Reset to 15cm square size"):
                 object_transform.reset()
+                object_transform.sx = 1.410
+                object_transform.sy = 0.825
                 transform_changed = True
             psim.PopItemWidth()
 
-            psim.PushItemWidth(350)
-            changed, values = psim.SliderFloat3(
-                "Translate",
-                [object_transform.tx, object_transform.ty, object_transform.tz],
-                v_min=-5.0,
-                v_max=5.0,
-                format="%.4f",
-            )
-            if changed:
-                object_transform.tx = values[0]
-                object_transform.ty = values[1]
-                object_transform.tz = values[2]
-                transform_changed = True
+            if not hasattr(self, "square_size"):
+                self.square_size = 15.0
 
-            changed, values = psim.SliderFloat3(
-                "Rotate",
-                [object_transform.rx, object_transform.ry, object_transform.rz],
-                v_min=-180.0,
-                v_max=180.0,
-                format="%.3f",
-            )
-            if changed:
-                object_transform.rx = values[0]
-                object_transform.ry = values[1]
-                object_transform.rz = values[2]
-                transform_changed = True
-
-            changed, values = psim.SliderFloat3(
-                "Scale",
-                [object_transform.sx, object_transform.sy, object_transform.sz],
-                v_min=-5.0,
-                v_max=5.0,
-                format="%.4f",
-            )
-            if changed:
-                object_transform.sx = values[0]
-                object_transform.sy = values[1]
-                object_transform.sz = values[2]
+            _, self.square_size = psim.InputFloat("Set Square Size:", self.square_size, format="%.2f")
+            psim.SameLine()
+            if psim.Button("Square size (cm)"):
+                sy, sx = self.calculate_sx_and_sy(self.square_size)
+                object_transform.sx = sx
+                object_transform.sy = sy
                 transform_changed = True
             psim.PopItemWidth()
 
             if transform_changed:
                 self.primitives.rebuild_bvh_if_needed(force=True, rebuild=False)
                 self.is_force_canvas_dirty = True
+
             psim.TreePop()
+
+    def calculate_sx_and_sy(self, square: float):
+        sx = (square * 4 + (square * 0.3) * 5) * 0.01
+        sy = (square * 7 + (square * 0.3) * 8) * 0.01
+        return sx, sy
+
+        # psim.PushItemWidth(350)
+        # changed, values = psim.SliderFloat3(
+        #     "Translate",
+        #     [object_transform.tx, object_transform.ty, object_transform.tz],
+        #     v_min=-5.0, v_max=5.0,
+        #     format="%.4f",
+        #     power=1.0
+        # )
+        # if changed:
+        #     object_transform.tx = values[0]
+        #     object_transform.ty = values[1]
+        #     object_transform.tz = values[2]
+        #     transform_changed = True
+
+        # changed, values = psim.SliderFloat3(
+        #     "Rotate",
+        #     [object_transform.rx, object_transform.ry, object_transform.rz],
+        #     v_min=-180.0, v_max=180.0,
+        #     format="%.3f",
+        #     power=1.0
+        # )
+        # if changed:
+        #     object_transform.rx = values[0]
+        #     object_transform.ry = values[1]
+        #     object_transform.rz = values[2]
+        #     transform_changed = True
+
+        # changed, values = psim.SliderFloat3(
+        #     "Scale",
+        #     [object_transform.sx, object_transform.sy, object_transform.sz],
+        #     v_min=-5.0, v_max=5.0,
+        #     format="%.4f",
+        #     power=1.0
+        # )
+        # if changed:
+        #     object_transform.sx = values[0]
+        #     object_transform.sy = values[1]
+        #     object_transform.sz = values[2]
+        #     transform_changed = True
+        # psim.PopItemWidth()
 
     def _draw_diffuse_pbr_settings_widget(self, obj):
         has_single_material = torch.min(obj.material_id) == torch.max(obj.material_id)
@@ -1031,6 +1443,56 @@ class Playground:
             self.primitives.recompute_stacked_buffers()
         self.is_force_canvas_dirty = self.is_force_canvas_dirty or settings_changed
 
+    def _draw_single_vk_cam(self, i, cam: DistortionCamera):
+        view_params = polyscope_from_kaolin_camera(cam)
+        eye = view_params.get_position()
+        target = view_params.get_position() + view_params.get_look_dir()  # TODO: print eye target and up
+        up = view_params.get_up_dir()
+        dist = cam.distortion_coefficients
+        psim.PushItemWidth(200)
+        if psim.Button(f"Fly to"):
+            ps.look_at_dir(eye, target, up, fly_to=True)
+
+        xi_alpha = "Not Fisheye"
+        if cam.distortion_coefficients[5] != 0.0:
+            xi = round(float(cam.distortion_coefficients[9]), 2)
+            alpha = round(float(cam.distortion_coefficients[10]), 2)
+            xi_alpha = f"xi: {xi}, alpha: {alpha}"
+
+        # if cam is not None:
+        #     fx, fy, cx, cy = cam.intrinsics.focal_x, cam.intrinsics.focal_y, cam.intrinsics.x0, cam.intrinsics.y0
+        #     window_w, window_h = cam.intrinsics.width, cam.intrinsics.height
+        #     h_fov = 2 * math.atan2(window_w / 2, fx) * (180 / math.pi)
+        #     v_fov = 2 * math.atan2(window_h / 2, fy) * (180 / math.pi)
+
+        #     psim.Text(f"Horizontal FOV: {h_fov:.2f} degrees")
+        #     psim.Text(f"Vertical FOV: {v_fov:.2f} degrees")
+
+        psim.SameLine()
+        psim.Text(f"(Selected), {xi_alpha}")
+        psim.PopItemWidth()
+
+    def _draw_cam_trajectory_view(self, poses_list):
+        if poses_list is not None:
+            for i in range(len(poses_list)):
+                pose = poses_list[i]
+                if psim.Button(f"Move to Pose {i}"):
+                    # All poses in file are from origin camera
+                    self.selected_pose_idx = i
+                    self.novel_view_renderer.move_rig_to_pose(pose)
+                    cam = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
+                    view_params = polyscope_from_kaolin_camera(cam)
+                    eye = view_params.get_position()
+                    target = view_params.get_position() + view_params.get_look_dir()
+                    up = view_params.get_up_dir()
+                    ps.look_at_dir(eye, target, up, fly_to=True)
+
+                # if self.selected_pose_idx == i and psim.Button(f"Add to output trajectory"):
+                #     camera = polyscope_to_kaolin_camera(
+                #         ps.get_view_camera_parameters(), width=self.video_w, height=self.video_h
+                #     )
+                #     self.video_recorder.trajectory.append(camera)
+
     def _draw_single_trajectory_camera(self, i, cam):
         view_params = polyscope_from_kaolin_camera(cam)
         eye = view_params.get_position()
@@ -1056,6 +1518,40 @@ class Playground:
         psim.PopItemWidth()
         return is_not_removed
 
+    from mcap.writer import Writer
+
+    def render_mcap_trajectory(self, poses):
+        """Renders the trajectory to an mcap file from all cameras
+        using the provided poses.
+        Args:
+            poses (list): List of poses (loaded trajectory from origin) to render.
+        """
+        self.mcap_convertor = McapConverter()
+        self.video_recorder.export_format = "mcap"
+        self.mcap_convertor.output_filename = "long_final_path.mcap"
+        self.mcap_convertor.set_filepath()
+        interval = self.mcap_convertor.calculate_time_interval()
+        cam_names = ["CamA", "CamB", "CamC", "CamD"]
+        with open(self.mcap_convertor.output_fullpath, "wb") as stream:
+            writer = Writer(stream)
+            writer.start(profile="VisualKit")
+            channels = {}
+            num_frames = self.video_recorder.get_num_frames(len(poses))  # change to get this frm self.vid_recorder
+            for cam_name in cam_names:
+                time_stamp = 0
+                self.video_recorder.reset_for_new_cam_path_export()
+
+                # Now populate according to the cam name
+                index = cam_names.index(cam_name)
+                self.populate_vid_trajectory(poses, idx=index)
+                for i in trange(num_frames, desc=f"Writing frames for {cam_name}"):
+                    frame = self.video_recorder.obtain_single_camera_frame(frame_index=i, cam_name=cam_name)
+                    self.mcap_convertor.write_cam_frame_to_mcap(writer, channels, cam_name, frame, i, time_stamp)
+                    time_stamp += interval
+
+            writer.finish()
+            sys.exit(f"MCAP file written to {self.mcap_convertor.output_fullpath}")
+
     @torch.cuda.nvtx.range("ps_ui_callback")
     def ps_ui_callback(self):
         """Polyscope custom UI callback - used to draw gui menu"""
@@ -1066,6 +1562,8 @@ class Playground:
         self._draw_environment_widget()
         psim.Separator()
         self._draw_video_recording_controls()
+        psim.Separator()
+        self._draw_novel_view_from_calib_controls()
         psim.Separator()
         self._draw_slice_plane_controls()
         psim.Separator()

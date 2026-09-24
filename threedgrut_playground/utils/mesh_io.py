@@ -232,3 +232,50 @@ def create_quad_mesh(device):
         device=device,
     )
     return mesh
+
+def create_cube_mesh(device):
+    """Creates a procedurally generated cube mesh with proper UV mapping."""
+    MS = 1.0  # half side length
+
+    # Define 6 faces, each with 4 vertices (24 vertices total for unique UVs per face)
+    face_vertices = [
+        # bottom (-Z)
+        [[-MS, -MS, -MS], [MS, -MS, -MS], [MS, MS, -MS], [-MS, MS, -MS]],
+        # top (+Z)
+        [[-MS, -MS, MS], [MS, -MS, MS], [MS, MS, MS], [-MS, MS, MS]],
+        # front (-Y)
+        [[-MS, -MS, -MS], [MS, -MS, -MS], [MS, -MS, MS], [-MS, -MS, MS]],
+        # back (+Y)
+        [[-MS, MS, -MS], [MS, MS, -MS], [MS, MS, MS], [-MS, MS, MS]],
+        # left (-X)
+        [[-MS, -MS, -MS], [-MS, MS, -MS], [-MS, MS, MS], [-MS, -MS, MS]],
+        # right (+X)
+        [[MS, -MS, -MS], [MS, MS, -MS], [MS, MS, MS], [MS, -MS, MS]],
+    ]
+    face_uvs = [
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] for _ in range(6)
+    ]
+
+    vertices = []
+    uvs = []
+    faces = []
+    for i, (verts, uvs_face) in enumerate(zip(face_vertices, face_uvs)):
+        idx_offset = i * 4
+        vertices.extend(verts)
+        uvs.extend(uvs_face)
+        # Two triangles per face
+        faces.append([idx_offset, idx_offset + 1, idx_offset + 2])
+        faces.append([idx_offset, idx_offset + 2, idx_offset + 3])
+
+    vertices = torch.tensor(vertices, dtype=torch.float32)
+    faces = torch.tensor(faces, dtype=torch.int64)
+    vertex_uvs = torch.tensor(uvs, dtype=torch.float32)
+    face_uvs = vertex_uvs[faces].contiguous()  # (F, 3, 2)
+
+    mesh = create_procedural_mesh(
+        vertices=vertices,
+        faces=faces,
+        face_uvs=face_uvs,
+        device=device
+    )
+    return mesh

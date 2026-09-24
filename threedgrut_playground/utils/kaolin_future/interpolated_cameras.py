@@ -18,8 +18,9 @@ from typing import Callable, Iterator, List, Union
 import numpy as np
 import torch
 from kaolin.math import quat
-from kaolin.render.camera import Camera
 from scipy.special import comb
+
+from threedgrut_playground.utils.distortion_camera import DistortionCamera as Camera
 
 """
 This module is to be included in next version of kaolin 0.18.0.
@@ -301,9 +302,35 @@ def interpolate_camera_on_polynomial_path(
     width = round(_lerp(cam1.width, cam2.width, x))
     height = round(_lerp(cam1.height, cam2.height, x))
 
-    cam = Camera.from_args(view_matrix=view_matrix, width=width, height=height, device=cam1.device, **intrinsics)
+    cam = Camera.from_args(
+        view_matrix=view_matrix,
+        distortion_coefficients=cam1.distortion_coefficients,
+        width=width,
+        height=height,
+        device=cam1.device,
+        **intrinsics,
+    )
+    # # Check if the cam here has distortion coefficients, if not, raise error
+    # if cam.distortion_coefficients is None or len(cam.distortion_coefficients) == 0:
+    #     raise ValueError("Interpolated camera does not have distortion coefficients. "
+    #                      "Ensure all cameras in the trajectory have valid distortion coefficients.")
 
     return cam
+
+
+def get_intrinsics_of_first_cam(trajectory: List[Camera]) -> List[float]:
+    """Returns the intrinsics of the first camera in the trajectory.
+    This is useful to ensure that the interpolated cameras have the same intrinsics as the first camera.
+
+    Args:
+        trajectory (List[Camera]): A trajectory of camera nodes.
+
+    Returns:
+        dict: Intrinsics of the first camera in the trajectory.
+    """
+    if not trajectory:
+        raise ValueError("The trajectory is empty. Cannot get intrinsics.")
+    return trajectory[0].get_camera_intrinsics()
 
 
 def interpolate_camera_on_spline_path(
@@ -377,8 +404,23 @@ def interpolate_camera_on_spline_path(
     width = round(_catmull_rom(cam1.width, cam2.width, cam3.width, cam4.width, x))
     height = round(_catmull_rom(cam1.height, cam2.height, cam3.height, cam4.height, x))
 
+    fx, fy, cx, cy = get_intrinsics_of_first_cam(trajectory=trajectory)
     # Create camera from view matrix
-    cam = Camera.from_args(view_matrix=view_matrix, width=width, height=height, device=cam1.device, **intrinsics)
+    cam = Camera.from_args(
+        view_matrix=view_matrix,
+        distortion_coefficients=cam1.distortion_coefficients,
+        width=width,
+        height=height,
+        device=cam1.device,
+        focal_x=fx,
+        focal_y=fy,
+        x0=cx,
+        y0=cy,
+        # **intrinsics
+    )
+    # check the type of the camera
+    # import sys
+    # sys.exit(f"Intrinsics: {cam.get_camera_intrinsics()}")
 
     return cam
 
@@ -393,6 +435,12 @@ def get_interpolator(interpolation: str, trajectory: List[Camera]) -> Callable:
     Returns:
         Callable: An interpolator function that takes a trajectory, timestep, and frames_between_cameras, and returns a camera.
     """
+    # check if trajectory cam has distortion coefficients
+    # if not trajectory:
+    #     raise ValueError("The trajectory must contain at least one camera.")
+    # if not all(hasattr(cam, 'distortion_coefficients') for cam in trajectory):
+    #     raise ValueError("All cameras in the trajectory must have 'distortion_coefficients' attribute.")
+
     if interpolation == "polynomial":
         interpolator = interpolate_camera_on_polynomial_path
         if len(trajectory) < 2:
@@ -465,6 +513,9 @@ def camera_path_generator(
     interpolator = get_interpolator(interpolation, trajectory)
 
     _trajectory = [trajectory[0]] + trajectory + [trajectory[-1], trajectory[-1]]
+    # check if all cameras in the trajectory have distortion coefficients
+    if not all(hasattr(cam, "distortion_coefficients") for cam in _trajectory):
+        raise ValueError("All cameras in the trajectory must have 'distortion_coefficients' attribute.")
     timestep = frames_between_cameras
 
     while True:

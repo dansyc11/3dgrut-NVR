@@ -14,7 +14,7 @@ with_gui: false
 with_viser_gui: false
 gui_update_from_device: true
 val_frequency: 5000
-num_workers: 24
+num_workers: 16
 use_wandb: false
 wandb_project: "3dgrt"
 test_last: true
@@ -129,7 +129,7 @@ model:
   print_stats: true
 
 checkpoint:
-  iterations: ${int_list:[ 7000, 30000 ]}
+  iterations: ${int_list:[ 7000, 10000, 12000]}
 
 optimizer:
   type: adam # We only support adam and selective_adam for now
@@ -158,7 +158,7 @@ scheduler:
     lr_init: ${optimizer.params.positions.lr}
     lr_final: 0.0000016
 
-    max_steps: 30000
+    max_steps: 12000
 
   density:
     type: skip
