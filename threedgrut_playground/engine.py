@@ -362,6 +362,12 @@ class Primitives:
                 end_y = min((j + 1) * checkboard_square, checkboard_res)
                 checkboard_texture[start_y:end_y, start_x:end_x, :3] = 0.5
         
+        from threedgrut_playground.utils.boards import build_materials
+        return build_materials(
+            device, PBRMaterial,
+            os.path.join(os.path.dirname(__file__), '..', 'assets', 'vilota_logo.png'))
+
+    def _unused_old_materials(self, device, checkboard_texture):
         aprilgrid_texture = create_aprilgrid_texture(0.3, 800, device, 4, 7)
         default_materials = dict(
             # solid=PBRMaterial(
@@ -398,7 +404,8 @@ class Primitives:
         )
         return default_materials
 
-    def add_primitive(self, geometry_type: str, primitive_type: OptixPrimitiveTypes, device) -> None:
+    def add_primitive(self, geometry_type: str, primitive_type: OptixPrimitiveTypes, device,
+                      material_name: str = None) -> None:
         """ Creates a mesh from geometry type, sets up its materials and transforms,
         and adds it to the scene with automatic scaling.
 
@@ -421,6 +428,17 @@ class Primitives:
         name = f"{geometry_type} {self.instance_counter[geometry_type]}"
 
         mesh = self.create_geometry(geometry_type, device)
+
+        # mesh_io.py zeroes material_assignments for every procedural mesh,
+        # so without this every quad shows material 0.
+        if material_name is not None:
+            if material_name not in self.registered_materials:
+                raise KeyError(f'no material named {material_name}. '
+                               f'Have: {sorted(self.registered_materials)}')
+            mesh.material_assignments = torch.full_like(
+                mesh.material_assignments,
+                self.registered_materials[material_name].material_id)
+            name = f'{material_name} {self.instance_counter[geometry_type]}'
 
         # Generate tangents mas, if available
         num_verts = len(mesh.vertices)
@@ -741,9 +759,15 @@ class Engine3DGRUT:
             scene_scale=scene_scale,
             device=self.device
         )
-        self.primitives.add_primitive(
-            geometry_type='Quad', primitive_type=OptixPrimitiveTypes.DIFFUSE, device=self.device
-        )
+        # PLAYGROUND_BOARDS=1 spawns one quad per rig board plus the logo.
+        # They all spawn at the origin, so move them apart in the GUI.
+        if os.environ.get('PLAYGROUND_BOARDS'):
+            from threedgrut_playground.utils.boards import spawn_scene
+            spawn_scene(self, OptixPrimitiveTypes.DIFFUSE, self.device)
+        else:
+            self.primitives.add_primitive(
+                geometry_type='Quad', primitive_type=OptixPrimitiveTypes.DIFFUSE, device=self.device
+            )
         self.rebuild_bvh(self.scene_mog)
         if self.envmap is not None:
             self.force_white_bg = False

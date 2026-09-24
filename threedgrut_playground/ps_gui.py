@@ -109,8 +109,15 @@ class Playground:
         ps.set_max_fps(-1)
         ps.set_background_color((0., 0., 0.))
         ps.set_ground_plane_mode("none")
-        ps.set_window_resizable(False)
-        ps.set_window_size(1280, 800)
+        # PLAYGROUND_WIN=WxH overrides the default window size. The window
+        # stays user-resizable; nothing re-forces its size per frame any more.
+        try:
+            win_w, win_h = (int(v) for v in
+                            os.environ.get("PLAYGROUND_WIN", "").lower().split("x"))
+        except ValueError:
+            win_w, win_h = 1600, 1000
+        ps.set_window_resizable(True)
+        ps.set_window_size(win_w, win_h)
         ps.set_give_focus_on_show(True)
         ps.set_automatically_compute_scene_extents(False)
         ps.set_bounding_box(np.array([-1.5, -1.5, -1.5]), np.array([1.5, 1.5, 1.5]))
@@ -152,8 +159,13 @@ class Playground:
         if self.novel_view_renderer.is_loaded():
             camera = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
             window_w, window_h = camera.width, camera.height
-        
-        ps.set_window_size(window_w, window_h)
+
+        # No ps.set_window_size here: the render buffers are sized from the
+        # camera above, so the output stays camera-exact and the fullscreen
+        # image quantity stretches to whatever window the user chose. The
+        # per-frame resize used to snap the OS window to the camera
+        # resolution and made it impossible to resize. A one-shot snap
+        # remains in the "Fly to" paths (_snap_window_to_camera).
         # Update polyscope camera with params from gui
         view_params = ps.CameraParameters(
             ps.CameraIntrinsics(fov_vertical_deg=self.engine.camera_fov, aspect=window_w / window_h),
@@ -276,8 +288,6 @@ class Playground:
     def _draw_preset_settings_widget(self):
         psim.SetNextItemOpen(True, psim.ImGuiCond_FirstUseEver)
         if psim.TreeNode("Quick Settings"):
-            psim.PushItemWidth(150)
-
             if (psim.Button("Fast")):
                 self.engine.use_spp = False
                 self.engine.antialiasing_mode = '4x MSAA'
@@ -305,7 +315,6 @@ class Playground:
                 self.engine.use_optix_denoiser = True
                 self.is_force_canvas_dirty = True
 
-            psim.PushItemWidth(150)
             psim.TreePop()
 
     def _draw_render_widget(self):
@@ -517,7 +526,6 @@ class Playground:
 
                 psim.TreePop()
 
-            psim.PopItemWidth()
             psim.TreePop()
 
     def add_cam_to_vid_recorder(self, index):
@@ -552,13 +560,33 @@ class Playground:
         if psim.TreeNode("Novel View from Vilota Calibration file"):
             #psim.Text("Place your calibration file into a folder called ./calibrations")
             
+            # CALIB DROPDOWN. Scanned once, refreshable. Each entry shows the
+            # deviceName inside the file, because the filename and the serial
+            # do not always agree: vk180.json holds DP180IP-2404-0004.
+            if not hasattr(self, "_calib_files"):
+                self._calib_files, self._calib_labels = self._scan_calibration_files()
+                cur = self.novel_view_renderer.calibration_filename
+                self._calib_idx = (self._calib_files.index(cur)
+                                   if cur in self._calib_files else 0)
+            if self._calib_files:
+                changed, self._calib_idx = psim.Combo(
+                    "Calibration file", self._calib_idx, self._calib_labels)
+                if changed:
+                    self.novel_view_renderer.calibration_filename = \
+                        self._calib_files[self._calib_idx]
+                psim.SameLine()
+                if psim.Button("Rescan"):
+                    del self._calib_files
+            else:
+                psim.Text("No .json files in ./calibration_files/")
+
             _, self.novel_view_renderer.calibration_filename = psim.InputText(
-                "Calibration Path (relative to root)",
+                "Calib path",
                 self.novel_view_renderer.calibration_filename
             )
             self.novel_view_renderer.set_filepath()
             calibration_path = self.novel_view_renderer.calibration_fullpath
-            psim.Text(f"Calibration file will be loaded from:{calibration_path}")
+            psim.TextWrapped(f"Loads from: {calibration_path}")
 
             # Disable "Load Calibration" button if calibration is already loaded
             psim.BeginDisabled(self.calibration_loaded == True)
@@ -598,7 +626,7 @@ class Playground:
                         self._novel_view_calib_status = f"{e}"
             # Always display the status message if present
             if self._novel_view_calib_status:
-                psim.Text(self._novel_view_calib_status)
+                psim.TextWrapped(self._novel_view_calib_status)
             
             
             if getattr(self, "selected_camera_idx", None) is None:
@@ -619,6 +647,9 @@ class Playground:
             if self.calibration_loaded:
                 if psim.TreeNode("Device loaded"):
                     psim.Text(self.novel_view_renderer.get_device_name_and_serial_no())
+                    _, self.flyto_relative = psim.Checkbox(
+                        "Fly to relative to current view",
+                        getattr(self, "flyto_relative", False))
                     for idx, (camera) in self.novel_view_renderer.get_all_cameras().items():
                         # Draw a button to select this camera
                         if psim.Button(f"Select {self.novel_view_renderer.get_cam_name_at_index(idx)}"):
@@ -633,11 +664,12 @@ class Playground:
 
                 if psim.TreeNode("Save/Load Video trajectory"):
                     if self._trajectory_status:
-                        psim.Text(self._trajectory_status)
+                        psim.TextWrapped(self._trajectory_status)
                     _, self.novel_view_renderer.trajectory_filename = psim.InputText(
-                        "Trajectory filename (in ./video_trajectories)",
+                        "Trajectory file",
                         self.novel_view_renderer.trajectory_filename
                     )
+                    psim.TextWrapped("in ./video_trajectories/")
                     if not self.trajectory_loaded and psim.Button("Load Trajectory"):
                         try:
                             self.novel_view_renderer.set_trajectory_filepath()
@@ -650,6 +682,29 @@ class Playground:
                         except Exception as e:
                             self._trajectory_status = f"{e}"
                     psim.SameLine()
+                    if psim.Button("Build Orbit Trajectory"):
+                        from threedgrut_playground.utils.orbit_trajectory import build_orbit_trajectory
+                        try:
+                            self.poses = build_orbit_trajectory(
+                                self, flip=getattr(self, "orbit_flip", False)
+                            )
+                            self._trajectory_status = f"Orbit built: {len(self.poses)} poses"
+                            self.trajectory_loaded = True
+                            # Park the rig at the selected camera's first orbit
+                            # pose, so "Fly to" shows the render's first view
+                            # instead of the world origin.
+                            if self.poses:
+                                first = getattr(self, "orbit_first_pose", {}).get(
+                                    self.selected_camera_idx, 0)
+                                self._fly_to_pose(first, self.poses[first])
+                                self._trajectory_status += f", rig at pose {first}"
+                        except Exception as e:
+                            self._trajectory_status = f"Orbit failed: {e}"
+                    psim.SameLine()
+                    _, self.orbit_flip = psim.Checkbox(
+                        "Flip side", getattr(self, "orbit_flip", False)
+                    )
+
                     if psim.Button("Create New Trajectory"):
                         self.poses = self.novel_view_renderer.create_new_trajectory()
                         self._trajectory_status = "Created a new trajectory. Add poses to it."
@@ -846,7 +901,7 @@ class Playground:
                     self.slice_planes[sp_idx].set_pose(self.slice_plane_pos[sp_idx], self.slice_plane_normal[sp_idx])
                 any_plane_changed |= changed
 
-                psim.PushItemWidth(350)
+                psim.PushItemWidth(psim.GetContentRegionAvail()[0] * 0.65)
                 changed, values = psim.SliderFloat3(
                     f"SPPos{sp_idx}",
                     [self.slice_plane_pos[sp_idx][0], self.slice_plane_pos[sp_idx][1], self.slice_plane_pos[sp_idx][2]],
@@ -952,6 +1007,7 @@ class Playground:
                 psim.ProgressBar(fraction=self.engine.spp.spp_accumulated_for_frame / self.engine.spp.spp,
                                  size_arg=(progress_width, 0))
 
+            psim.PopItemWidth()
             psim.TreePop()
 
     def _draw_depth_of_field_widget(self):
@@ -1018,8 +1074,6 @@ class Playground:
                     self._draw_transform_widget(obj)
                     psim.TreePop()
             psim.TreePop()
-
-        psim.PopItemWidth()
 
         for obj_name in removed_objs:
             self.primitives.remove_primitive(obj_name)
@@ -1243,6 +1297,35 @@ class Playground:
 
         return is_retained, is_duplicated
 
+
+    def _scan_calibration_files(self):
+        """List .json files in ./calibration_files/ with their device name.
+
+        Returns (filenames, labels). A file without cameraData is marked, so
+        the dropdown never offers something the loader will reject.
+        """
+        import json
+        import os
+        folder = "./calibration_files/"
+        names, labels = [], []
+        try:
+            found = sorted(f for f in os.listdir(folder) if f.endswith(".json"))
+        except OSError:
+            return [], []
+        for fn in found:
+            try:
+                with open(os.path.join(folder, fn)) as fh:
+                    d = json.load(fh)
+                cams = len(d.get("cameraData", []))
+                dev = d.get("deviceName") or "no deviceName"
+                label = (f"{fn}  [{dev}, {cams} cams]" if cams
+                         else f"{fn}  [no cameraData]")
+            except Exception:
+                label = f"{fn}  [unreadable]"
+            names.append(fn)
+            labels.append(label)
+        return names, labels
+
     def _draw_transform_widget(self, obj):
 
         psim.SetNextItemOpen(True, psim.ImGuiCond_FirstUseEver)
@@ -1254,8 +1337,14 @@ class Playground:
             #     object_transform.reset()
             #     transform_changed = True
             # psim.PopItemWidth()
-            if psim.Button("Reset to 15cm square size"):
+            if psim.Button("Reset to 30cm square size"):
+                # Change the size, keep the board where it is. reset() also
+                # zeroes translation and rotation, which loses the placement.
+                _t = (object_transform.tx, object_transform.ty, object_transform.tz)
+                _r = (object_transform.rx, object_transform.ry, object_transform.rz)
                 object_transform.reset()
+                object_transform.tx, object_transform.ty, object_transform.tz = _t
+                object_transform.rx, object_transform.ry, object_transform.rz = _r
                 object_transform.sx = 1.410
                 object_transform.sy = 0.825
                 transform_changed = True
@@ -1270,11 +1359,77 @@ class Playground:
                 format="%.2f"
             )
             psim.SameLine()
+            sized = self.size_any_object(obj, self.square_size)
             if psim.Button("Square size (cm)"):
-                sy, sx = self.calculate_sx_and_sy(self.square_size)
-                object_transform.sx = sx
-                object_transform.sy = sy
+                if sized is None:
+                    print("[playground] no texture on this object, cannot size it")
+                else:
+                    object_transform.sx, object_transform.sy = sized[0], sized[1]
+                    transform_changed = True
+            psim.SameLine()
+            psim.TextDisabled(sized[2] if sized else "no texture")
+
+            # SLIDERS RESTORED
+            psim.PushItemWidth(psim.GetContentRegionAvail()[0] * 0.65)
+            changed, values = psim.SliderFloat3(
+                "Translate",
+                [object_transform.tx, object_transform.ty, object_transform.tz],
+                v_min=-15.0, v_max=15.0,
+                format="%.4f",
+            )
+            if changed:
+                object_transform.tx = values[0]
+                object_transform.ty = values[1]
+                object_transform.tz = values[2]
                 transform_changed = True
+
+            changed, values = psim.SliderFloat3(
+                "Rotate",
+                [object_transform.rx, object_transform.ry, object_transform.rz],
+                v_min=-180.0, v_max=180.0,
+                format="%.3f",
+            )
+            if changed:
+                object_transform.rx = values[0]
+                object_transform.ry = values[1]
+                object_transform.rz = values[2]
+                transform_changed = True
+
+            changed, values = psim.SliderFloat3(
+                "Scale",
+                [object_transform.sx, object_transform.sy, object_transform.sz],
+                v_min=-5.0, v_max=5.0,
+                format="%.4f",
+            )
+            if changed:
+                object_transform.sx = values[0]
+                object_transform.sy = values[1]
+                object_transform.sz = values[2]
+                transform_changed = True
+            psim.PopItemWidth()
+
+            # Type exact numbers. The sliders are for finding a position,
+            # these are for recording one.
+            psim.PushItemWidth(220)
+            _, tvals = psim.InputFloat3(
+                "Translate (exact)",
+                [object_transform.tx, object_transform.ty, object_transform.tz],
+                format="%.4f")
+            if psim.Button("Apply translate"):
+                object_transform.tx = tvals[0]
+                object_transform.ty = tvals[1]
+                object_transform.tz = tvals[2]
+                transform_changed = True
+            _, rvals = psim.InputFloat3(
+                "Rotate (exact)",
+                [object_transform.rx, object_transform.ry, object_transform.rz],
+                format="%.3f")
+            if psim.Button("Apply rotate"):
+                object_transform.rx = rvals[0]
+                object_transform.ry = rvals[1]
+                object_transform.rz = rvals[2]
+                transform_changed = True
+            psim.PopItemWidth()
 
             if transform_changed:
                 self.primitives.rebuild_bvh_if_needed(force=True, rebuild=False)
@@ -1282,53 +1437,65 @@ class Playground:
             
             psim.TreePop()
 
-    def calculate_sx_and_sy(self, square: float):
-            sx = (square * 4 + (square *0.3) * 5) * 0.01
-            sy = (square * 7 + (square *0.3) * 8) * 0.01
-            return sx, sy
+    def calculate_sx_and_sy(self, square: float, rows: int = 4, cols: int = 7):
+        """Half-extents for a rows x cols board. square is the tag pitch in cm.
+
+        The old version had rows and cols swapped and hardcoded 4 and 7. The
+        call site swapped them back, so the two faults cancelled for a 4x7
+        board and for nothing else. It also ignored the one-gap border that
+        add_padding draws.
+        """
+        return ((cols + 0.3 * (cols - 1) + 0.6) * square * 0.01 / 2.0,
+                (rows + 0.3 * (rows - 1) + 0.6) * square * 0.01 / 2.0)
+
+    def material_for(self, obj):
+        """Return (name, material) for the object, or (None, None)."""
+        try:
+            mat_id = obj.material_id[0].item()
+        except Exception:
+            return None, None
+        for name, mat in self.primitives.registered_materials.items():
+            if mat.material_id == mat_id:
+                return name, mat
+        return None, None
+
+    def board_shape_for(self, obj):
+        """ANY SHAPE. Return (rows, cols) if the material is a known board."""
+        name, _mat = self.material_for(obj)
+        if name is None:
+            return None
+        try:
+            from threedgrut_playground.utils.boards import BOARD_SPECS
+        except Exception:
+            return None
+        for spec_name, rows, cols, _ids in BOARD_SPECS:
+            if spec_name == name:
+                return rows, cols
+        return None
+
+    def texture_aspect_for(self, obj):
+        """Width over height of the object's diffuse map, or None."""
+        _name, mat = self.material_for(obj)
+        dm = getattr(mat, "diffuse_map", None) if mat is not None else None
+        if dm is None or dm.ndim < 2 or dm.shape[0] == 0:
+            return None
+        return float(dm.shape[1]) / float(dm.shape[0])
+
+    def size_any_object(self, obj, value_cm):
+        """Half-extents for any object. Returns (sx, sy, rule) or None."""
+        shape = self.board_shape_for(obj)
+        if shape is not None:
+            rows, cols = shape
+            sx, sy = self.calculate_sx_and_sy(value_cm, rows, cols)
+            return sx, sy, f"tag pitch, {rows}x{cols} board"
+        aspect = self.texture_aspect_for(obj)
+        if aspect is None:
+            return None
+        sx = value_cm * 0.01 / 2.0
+        return sx, sx / aspect, f"quad width, aspect {aspect:.3f}"
 
 
 
-            # psim.PushItemWidth(350)
-            # changed, values = psim.SliderFloat3(
-            #     "Translate",
-            #     [object_transform.tx, object_transform.ty, object_transform.tz],
-            #     v_min=-5.0, v_max=5.0,
-            #     format="%.4f",
-            #     
-            # )
-            # if changed:
-            #     object_transform.tx = values[0]
-            #     object_transform.ty = values[1]
-            #     object_transform.tz = values[2]
-            #     transform_changed = True
-
-            # changed, values = psim.SliderFloat3(
-            #     "Rotate",
-            #     [object_transform.rx, object_transform.ry, object_transform.rz],
-            #     v_min=-180.0, v_max=180.0,
-            #     format="%.3f",
-            #     
-            # )
-            # if changed:
-            #     object_transform.rx = values[0]
-            #     object_transform.ry = values[1]
-            #     object_transform.rz = values[2]
-            #     transform_changed = True
-
-            # changed, values = psim.SliderFloat3(
-            #     "Scale",
-            #     [object_transform.sx, object_transform.sy, object_transform.sz],
-            #     v_min=-5.0, v_max=5.0,
-            #     format="%.4f",
-            #     
-            # )
-            # if changed:
-            #     object_transform.sx = values[0]
-            #     object_transform.sy = values[1]
-            #     object_transform.sz = values[2]
-            #     transform_changed = True
-            # psim.PopItemWidth()
             
 
     def _draw_diffuse_pbr_settings_widget(self, obj):
@@ -1356,16 +1523,42 @@ class Playground:
             self.primitives.recompute_stacked_buffers()
         self.is_force_canvas_dirty = self.is_force_canvas_dirty or settings_changed
 
+    def _relative_fly_target(self, cam_index):
+        """Fly-to target if the rig origin sat at the current viewport.
+        Viewport and result are polyscope/OpenGL axes; the rig extrinsic
+        is OpenCV axes, hence the F flips. Does not move the rig."""
+        F = np.diag([1.0, -1.0, -1.0, 1.0])
+        V = np.array(ps.get_view_camera_parameters().get_view_mat(), dtype=float)
+        E = np.array(self.novel_view_renderer.v_device.extrinsics[cam_index], dtype=float)
+        view = F @ (np.linalg.inv(E) @ (F @ V @ F)) @ F
+        rot, t = view[:3, :3], view[:3, 3]
+        eye = -rot.T @ t
+        # OpenCV +y points down, so the camera y axis is a DOWN vector.
+        # Polyscope wants UP. Negate it, or the preview shows the room
+        # inverted. This is preview only: the render builds its own
+        # matrices in novel_view_renderer and does not call look_at_dir.
+        return eye, eye - rot[2, :], -rot[1, :]
+
+    def _snap_window_to_camera(self, cam):
+        """One-shot window resize to the camera's native resolution, so the
+        fullscreen render preview maps 1:1 right after a Fly to. The window
+        stays resizable and nothing re-forces the size afterwards."""
+        ps.set_window_size(int(cam.width), int(cam.height))
+
     def _draw_single_vk_cam(self, i, cam: DistortionCamera):
         view_params = polyscope_from_kaolin_camera(cam)
         eye = view_params.get_position()
         target = view_params.get_position() + view_params.get_look_dir() #TODO: print eye target and up
-        up = view_params.get_up_dir()
+        # OpenCV +y is DOWN, Polyscope wants UP. Preview only: the render builds its own matrices in novel_view_renderer.
+        up = -view_params.get_up_dir()
         dist = cam.distortion_coefficients
         psim.PushItemWidth(200)
         if (psim.Button(f"Fly to")):
+            if getattr(self, "flyto_relative", False):
+                eye, target, up = self._relative_fly_target(i)
+            self._snap_window_to_camera(cam)
             ps.look_at_dir(eye, target, up, fly_to=True)
-        
+
         xi_alpha = "Not Fisheye"
         if cam.distortion_coefficients[5] != 0.0:
             xi = round(float(cam.distortion_coefficients[9]), 2)
@@ -1386,20 +1579,28 @@ class Playground:
         psim.PopItemWidth()
     
     
+    def _fly_to_pose(self, i, pose):
+        """Move the rig to trajectory pose i and fly the viewport to the
+        selected camera's view of it. Shared by "Move to Pose" and the
+        automatic park after "Build Orbit Trajectory"."""
+        # All poses in file are from origin camera
+        self.selected_pose_idx = i
+        self.novel_view_renderer.move_rig_to_pose(pose)
+        cam = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
+        view_params = polyscope_from_kaolin_camera(cam)
+        eye = view_params.get_position()
+        target = view_params.get_position() + view_params.get_look_dir()
+        # OpenCV +y is DOWN, Polyscope wants UP. Preview only: the render builds its own matrices in novel_view_renderer.
+        up = -view_params.get_up_dir()
+        self._snap_window_to_camera(cam)
+        ps.look_at_dir(eye, target, up, fly_to=True)
+
     def _draw_cam_trajectory_view(self, poses_list):
         if poses_list is not None:
             for i in range(len(poses_list)):
                 pose = poses_list[i]
                 if psim.Button(f"Move to Pose {i}"):
-                    # All poses in file are from origin camera
-                    self.selected_pose_idx = i
-                    self.novel_view_renderer.move_rig_to_pose(pose)
-                    cam = self.novel_view_renderer.get_camera_at_index(self.selected_camera_idx)
-                    view_params = polyscope_from_kaolin_camera(cam)
-                    eye = view_params.get_position()
-                    target = view_params.get_position() + view_params.get_look_dir()
-                    up = view_params.get_up_dir()
-                    ps.look_at_dir(eye, target, up, fly_to=True)
+                    self._fly_to_pose(i, pose)
                 
                 
                 # if self.selected_pose_idx == i and psim.Button(f"Add to output trajectory"):
@@ -1415,7 +1616,8 @@ class Playground:
         view_params = polyscope_from_kaolin_camera(cam)
         eye = view_params.get_position()
         target = view_params.get_position() + view_params.get_look_dir()
-        up = view_params.get_up_dir()
+        # OpenCV +y is DOWN, Polyscope wants UP. Preview only: the render builds its own matrices in novel_view_renderer.
+        up = -view_params.get_up_dir()
         psim.PushItemWidth(200)
         if (psim.Button(f"View {i + 1}")):
             ps.look_at_dir(eye, target, up, fly_to=True)
@@ -1475,6 +1677,9 @@ class Playground:
     @torch.cuda.nvtx.range("ps_ui_callback")
     def ps_ui_callback(self):
         """ Polyscope custom UI callback - used to draw gui menu"""
+        # Default widget width: half the panel, so labels keep the other
+        # half instead of being truncated by ImGui's window-based default.
+        psim.PushItemWidth(max(psim.GetContentRegionAvail()[0] * 0.5, 200.0))
         self._draw_preset_settings_widget()
         psim.Separator()
         self._draw_render_widget()
@@ -1492,7 +1697,7 @@ class Playground:
         self._draw_materials_widget()
         psim.Separator()
         self._draw_primitives_widget()
-        
+        psim.PopItemWidth()
 
         # Finally refresh the canvas by rendering the next pass, if needed
         if self.live_update:
