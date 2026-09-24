@@ -318,7 +318,8 @@ mv mcap_outputs/long_final_path.mcap mcap_outputs/orbit_${RUN}.mcap
 
 python fix_mcap_labels.py mcap_outputs/orbit_${RUN}.mcap ${RUN}_img.mcap \
   --topics S1/camd --serial ${SERIAL}
-TOPIC="S1/camd/tags:queued" ./run_offline_tags.sh ${RUN}_img.mcap ${RUN}_tags.mcap
+python tools/retime_for_detector.py ${RUN}_img.mcap ${RUN}_img_rt.mcap
+TOPIC="S1/camd/tags:queued" ./run_offline_tags.sh ${RUN}_img_rt.mcap ${RUN}_tags.mcap
 
 vk_calibrate \
   --vbag-path ${RUN}_tags.mcap \
@@ -335,15 +336,18 @@ mv mcap_outputs/long_final_path.mcap mcap_outputs/orbit_${RUN}.mcap
 
 python fix_mcap_labels.py mcap_outputs/orbit_${RUN}.mcap ${RUN}_img.mcap \
   --topics S1/cama S1/camb S1/camc S1/camd --serial ${SERIAL}
+python tools/retime_for_detector.py ${RUN}_img.mcap ${RUN}_img_rt.mcap
 CONFIG=offline_tags_all.json \
 TOPIC="S1/cama/tags:queued S1/camb/tags:queued S1/camc/tags:queued S1/camd/tags:queued" \
-./run_offline_tags.sh ${RUN}_img.mcap ${RUN}_tags.mcap
+./run_offline_tags.sh ${RUN}_img_rt.mcap ${RUN}_tags.mcap
 
 vk_calibrate \
   --vbag-path ${RUN}_tags.mcap \
   --cam-types kb4 kb4 kb4 ds --focal-lengths -1 -1 -1 550 \
   --serial-number ${SERIAL} --tag-sizes 0.30 --focal-ratio-prior
 ```
+
+`retime_for_detector.py` spaces the frame stamps 300 ms apart. The export stamps frames in real time (33 ms apart at 30 fps), and vk_camera_driver runs tag detection at most once per ~250 ms of stamp time, so without this step only every 8th frame gets detected.
 
 ### Flag notes
 
