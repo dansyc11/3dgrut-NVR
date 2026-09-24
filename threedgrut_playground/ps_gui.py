@@ -681,14 +681,27 @@ class Playground:
                             self._trajectory_status = f"{e}"
                         except Exception as e:
                             self._trajectory_status = f"{e}"
+                    # Trajectory type combo replaces the VIO_TRAJ env fork:
+                    # the env var only seeds the combo's default, the combo
+                    # decides what Build makes. Same code paths as before,
+                    # build_orbit_trajectory just gets the branch explicitly.
+                    if not hasattr(self, "traj_type_idx"):
+                        self.traj_type_idx = 1 if os.environ.get("VIO_TRAJ") else 0
+                    traj_types = ["Orbit", "VIO trajectory"]
+                    psim.PushItemWidth(140)
+                    _, self.traj_type_idx = psim.Combo(
+                        "Trajectory type", self.traj_type_idx, traj_types)
+                    psim.PopItemWidth()
                     psim.SameLine()
-                    if psim.Button("Build Orbit Trajectory"):
+                    if psim.Button("Build Trajectory"):
                         from threedgrut_playground.utils.orbit_trajectory import build_orbit_trajectory
+                        traj_label = traj_types[self.traj_type_idx]
                         try:
                             self.poses = build_orbit_trajectory(
-                                self, flip=getattr(self, "orbit_flip", False)
+                                self, flip=getattr(self, "orbit_flip", False),
+                                vio=(self.traj_type_idx == 1)
                             )
-                            self._trajectory_status = f"Orbit built: {len(self.poses)} poses"
+                            self._trajectory_status = f"{traj_label} built: {len(self.poses)} poses"
                             self.trajectory_loaded = True
                             # Park the rig at the selected camera's first orbit
                             # pose, so "Fly to" shows the render's first view
@@ -699,7 +712,7 @@ class Playground:
                                 self._fly_to_pose(first, self.poses[first])
                                 self._trajectory_status += f", rig at pose {first}"
                         except Exception as e:
-                            self._trajectory_status = f"Orbit failed: {e}"
+                            self._trajectory_status = f"{traj_label} failed: {e}"
                     psim.SameLine()
                     _, self.orbit_flip = psim.Checkbox(
                         "Flip side", getattr(self, "orbit_flip", False)
@@ -1582,7 +1595,7 @@ class Playground:
     def _fly_to_pose(self, i, pose):
         """Move the rig to trajectory pose i and fly the viewport to the
         selected camera's view of it. Shared by "Move to Pose" and the
-        automatic park after "Build Orbit Trajectory"."""
+        automatic park after "Build Trajectory"."""
         # All poses in file are from origin camera
         self.selected_pose_idx = i
         self.novel_view_renderer.move_rig_to_pose(pose)
