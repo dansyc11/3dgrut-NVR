@@ -420,7 +420,7 @@ The detector embeds the source image in every detection message, so the tags fil
 
 ```bash
 
-pip3 install rerun-sdk==0.20.1
+pip3 install rerun-sdk==0.27.2
 
 vk_mcap_to_rrd ${RUN}_tags.mcap viewer_demo.json -o /tmp/${RUN}.rrd -s 0 -e 15
 
