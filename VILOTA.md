@@ -39,7 +39,7 @@ Clone this repo as in [The four repos](#the-four-repos) and export `NVR` there.
 sudo apt install -y build-essential git wget curl libgl1-mesa-dev libx11-6
 ```
 
-NVIDIA driver 570 or newer, gcc 14 or older, and an X display for the GUI. No system CUDA: step 3 installs CUDA 12.8.1 inside the venv.
+NVIDIA driver 570 or newer, gcc 14 or older, and an X display for the GUI. No system CUDA is needed, and none is used: step 3 installs CUDA 12.8.1 inside the venv.
 
 Verify:
 
@@ -71,49 +71,34 @@ Expect both files.
 
 #### GPU environment: render and train
 
-Needs Linux, an NVIDIA driver 570 or newer, gcc 14 or older and an X display. The
-steps install CUDA 12.8.1 inside the venv, because torch is built for cu128. They
-also install the slang compiler 2025.13.2: newer slang releases reject the
-playground's kernels.
+Needs Linux, an NVIDIA driver 570 or newer, gcc 14 or older and an X display. Upstream's scripts build it: `create_venv_cuda.sh` puts CUDA 12.8.1 inside the venv, because torch is built for cu128, and `install_env_uv.sh` installs torch 2.8.0, kaolin 0.18.0, the tiny-cuda-nn bindings, PPISP, fused-ssim and the slang compiler 2026.5.2. The last line adds what Vilota's tools need on top.
 
 ```bash
 sudo apt install -y build-essential git wget curl libgl1-mesa-dev libx11-6
 curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
 cd 3dgrut-NVR          # cloned as in "The four repos" below
-git submodule update --init --recursive thirdparty/tiny-cuda-nn threedgrt_tracer/dependencies/optix-dev
-uv venv .venv --python 3.11 --prompt 3dgrut-nvr
-wget -O /tmp/cuda_12.8.1_linux.run https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_570.124.06_linux.run
-sh /tmp/cuda_12.8.1_linux.run --toolkit --toolkitpath="$PWD/.venv/cuda-12.8.1" --silent --no-man-page --override
-cat >> .venv/bin/activate <<'EOT'
-export CUDA_HOME="$VIRTUAL_ENV/cuda-12.8.1"
-export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;9.0;10.0;12.0+PTX"
-EOT
+FORCE_LOCAL_CUDA=1 CUDA_VERSION=12.8.1 ./scripts/create_venv_cuda.sh 3dgrut-nvr
 source .venv/bin/activate
-wget -O /tmp/slang-2025.13.2.tgz https://github.com/shader-slang/slang/releases/download/v2025.13.2/slang-2025.13.2-linux-x86_64.tar.gz
-tar -xzf /tmp/slang-2025.13.2.tgz -C .venv
-uv pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-uv pip install kaolin==0.18.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html
-uv pip install setuptools==78.1.1 slangtorch==1.3.22 plyfile torchmetrics tensorboard fire omegaconf hydra-core \
-    scikit-learn wandb polyscope==2.6.1 addict rich kornia opencv-python einops imageio msgpack dataclasses_json \
-    tqdm libigl pygltflib matplotlib scipy mcap pycapnp rerun-sdk==0.36.3
-uv pip install --no-build-isolation "git+https://github.com/rahul-goel/fused-ssim@1272e21a282342e89537159e4bad508b19b34157"
+./install_env_uv.sh 3dgrut-nvr
+uv pip install mcap pycapnp rerun-sdk==0.36.3 scipy matplotlib
 ```
+
+> ⚠️ Keep `FORCE_LOCAL_CUDA=1` even with a system CUDA installed. Without it the install uses `/usr/local/cuda`, and it supports only CUDA 11.8, 12.4, 12.6, 12.8 and 13.0: a 13.2 or 13.3 toolkit stops it.
+
+`create_venv_cuda.sh` downloads the 5.4 GB CUDA runfile to `/tmp/cuda_12.8.1_linux.run` and reuses it on a second run. `install_env_uv.sh` initialises the submodules, builds tiny-cuda-nn (several minutes) and ends with its own check.
 
 Verify, without rendering:
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.version.cuda)"
 command -v slangc && slangc -version
-python -c "import kaolin, polyscope, slangtorch, fused_ssim; print('gpu deps ok')"
+python -c "import kaolin, polyscope, fused_ssim, tinycudann, ppisp; print('gpu deps ok')"
 python -c "import threedgrut_playground.ps_gui, threedgrut.trainer; print('imports ok')"
 ```
 
-Expect `2.8.0+cu128 12.8`, `.venv/bin/slangc` with `2025.13.2`, `gpu deps ok` and `imports ok`.
+Expect `2.8.0+cu128 12.8`, `.venv/bin/slangc` with `2026.5.2`, `gpu deps ok` and `imports ok`.
 
 * The first playground launch compiles the CUDA extensions into the torch extension cache, which takes a few minutes.
-* The `.so` files committed under `threedgrut_playground/` are old CUDA 11 builds. The playground rebuilds them when they cannot load.
 * For the VIO process, add imu-sim's packages: `uv pip install -r $IMUSIM/requirements.txt`.
 
 #### CPU environment: tools and tests
@@ -362,8 +347,8 @@ python train.py --config-name apps/colmap_3dgut.yaml path=<colmap dataset> out_d
 | What you see | Why | Fix |
 |----|----|----|
 | `ModuleNotFoundError: No module named 'image_capnp'` | vk-system schemas missing | install vk-system; check `/opt/vilota/messages/image.capnp` |
-| `ModuleNotFoundError: No module named 'torchvision'` from kaolin | kaolin needs torchvision and doesn't declare it | install it as in step 3 |
-| First launch: `error[E20017]: 'const' not allowed on C-style pointer declaration` | a newer slang compiler than 2025.13.2 on `PATH` | activate the venv, which puts its own `slangc` first |
+| `ERROR: Unsupported CUDA version: 13.3` from `install_env_uv.sh` | it picked the system CUDA | run `create_venv_cuda.sh` with `FORCE_LOCAL_CUDA=1` first, as in step 3 |
+| `exec: -title: not found` while CUDA extracts | the runfile reopens itself in an xterm when `DISPLAY` is set and there is no terminal | run step 3 in a terminal, or `unset DISPLAY` first |
 | Extensions build against the wrong CUDA | venv not activated, so `CUDA_HOME` is a system CUDA | `source .venv/bin/activate` |
 | `python -m …vio_trajectory` fails with `No module named 'threedgrut_playground'` | run by file path, or not from the repo root | `python -m threedgrut_playground.utils.vio_trajectory` from the repo root |
 | boards render at double size | reset button pressed in scene-JSON mode | relaunch; the scene file sizes the boards |
