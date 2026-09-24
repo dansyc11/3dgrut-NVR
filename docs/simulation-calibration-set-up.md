@@ -416,15 +416,17 @@ Healthy: focal within 0.15%, principal point within 0.5 px (a known pixel-conven
 
 ## Step 6 (optional) — look at the detections
 
-The detector embeds the source image in every detection message, so the tags file alone is enough. Note the viewer shows the detected tag quads over a low-resolution intensity layer, not the full rendered photo:
+The detector embeds the source image in every detection message, so the tags file alone is enough. Note the viewer shows the detected tag quads over a low-resolution intensity layer, not the full rendered photo.
+
+`vk_mcap_to_rrd` writes rerun 0.27.2 recordings. Install that viewer in its own venv, in a folder that survives a reboot, so the renderer's rerun-sdk 0.36.3 is not downgraded:
 
 ```bash
 
-pip3 install rerun-sdk==0.27.2
+python3 -m venv ~/venvs/rerun027 && ~/venvs/rerun027/bin/pip install rerun-sdk==0.27.2
 
 vk_mcap_to_rrd ${RUN}_tags.mcap viewer_demo.json -o /tmp/${RUN}.rrd -s 0 -e 15
 
-rerun /tmp/${RUN}.rrd
+~/venvs/rerun027/bin/rerun /tmp/${RUN}.rrd
 ```
 
 > 📷 **PIC 6 — Rerun**, four synchronised camera streams with detections. Scrub to a busy part of the timeline (around +20s) so several cameras have the board in view — each camera only sees it during its own trajectory segment.
