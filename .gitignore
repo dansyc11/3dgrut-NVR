@@ -55,3 +55,8 @@ tools/**/.pytest_cache/
 video_trajectories/*.csv
 *.csv
 *.png
+calibration-*.json
+plot-*.json
+mcap_outputs/
+*.bak
+*.*bak

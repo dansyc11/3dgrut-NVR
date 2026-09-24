@@ -621,9 +621,7 @@ class Playground:
             ps_cam_params,
             width=cam_w,
             height=cam_h,
-            distortion_coefficients=(
-                self.distortions[self.selected_camera_idx] if self.selected_camera_idx is not None else None
-            ),
+            distortion_coefficients=self.distortions[index] if index is not None else None,
             fx=fx,
             fy=fy,
             cx=cx,
@@ -738,6 +736,7 @@ class Playground:
                             psim.SameLine()
                             self._draw_single_vk_cam(idx, camera)
                     psim.Text(f"Origin camera = {self.novel_view_renderer.get_origin_camera_index()}")
+                    psim.TreePop()
 
                 if psim.TreeNode("Save/Load Video trajectory"):
                     if self._trajectory_status:
@@ -794,6 +793,7 @@ class Playground:
                             poses_list = self.novel_view_renderer.get_trajectory_poses()
                             self.poses = poses_list
                             self._draw_cam_trajectory_view(self.poses)
+                            psim.TreePop()
 
                     psim.TreePop()
 
@@ -888,7 +888,6 @@ class Playground:
             #         up = view_params.get_up_dir()
             #         ps.look_at_dir(eye, target, up, fly_to=True)
 
-            psim.PopItemWidth()
             psim.TreePop()
 
     def populate_vid_trajectory(self, poses_list, idx=None):
@@ -1361,7 +1360,6 @@ class Playground:
                 object_transform.sx = sx
                 object_transform.sy = sy
                 transform_changed = True
-            psim.PopItemWidth()
 
             if transform_changed:
                 self.primitives.rebuild_bvh_if_needed(force=True, rebuild=False)
@@ -1380,7 +1378,7 @@ class Playground:
         #     [object_transform.tx, object_transform.ty, object_transform.tz],
         #     v_min=-5.0, v_max=5.0,
         #     format="%.4f",
-        #     power=1.0
+        #
         # )
         # if changed:
         #     object_transform.tx = values[0]
@@ -1393,7 +1391,7 @@ class Playground:
         #     [object_transform.rx, object_transform.ry, object_transform.rz],
         #     v_min=-180.0, v_max=180.0,
         #     format="%.3f",
-        #     power=1.0
+        #
         # )
         # if changed:
         #     object_transform.rx = values[0]
@@ -1406,7 +1404,7 @@ class Playground:
         #     [object_transform.sx, object_transform.sy, object_transform.sz],
         #     v_min=-5.0, v_max=5.0,
         #     format="%.4f",
-        #     power=1.0
+        #
         # )
         # if changed:
         #     object_transform.sx = values[0]
@@ -1532,12 +1530,16 @@ class Playground:
         self.mcap_convertor.set_filepath()
         interval = self.mcap_convertor.calculate_time_interval()
         cam_names = ["CamA", "CamB", "CamC", "CamD"]
+        # Render a subset. Set to None for all four.
+        only_cams = None
         with open(self.mcap_convertor.output_fullpath, "wb") as stream:
             writer = Writer(stream)
             writer.start(profile="VisualKit")
             channels = {}
             num_frames = self.video_recorder.get_num_frames(len(poses))  # change to get this frm self.vid_recorder
             for cam_name in cam_names:
+                if only_cams and cam_name not in only_cams:
+                    continue
                 time_stamp = 0
                 self.video_recorder.reset_for_new_cam_path_export()
 
