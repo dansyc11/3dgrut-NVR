@@ -355,7 +355,7 @@ class Playground:
                 ps.reset_camera_to_home_view()
             if psim.IsItemHovered():
                 psim.SetNextWindowPos([window_w - psim.GetWindowWidth() - 120, 20])
-                psim.Begin("Reset View", None, psim.ImGuiWindowFlags_NoTitleBar)
+                psim.Begin("Reset View", psim.ImGuiWindowFlags_NoTitleBar)
                 psim.TextUnformatted("View Navigation:")
                 psim.TextUnformatted("      Rotate: [left click drag]")
                 psim.TextUnformatted("   Translate: [shift] + [left click drag] OR [right click drag]")
@@ -526,7 +526,7 @@ class Playground:
         cam_w, cam_h = cam.width, cam.height
         ps_cam_params = polyscope_from_kaolin_camera(cam)
         camera = polyscope_to_kaolin_camera(
-                    ps_cam_params, width=cam_w, height=cam_h, distortion_coefficients=self.distortions[self.selected_camera_idx] if self.selected_camera_idx is not None else None,
+                    ps_cam_params, width=cam_w, height=cam_h, distortion_coefficients=self.distortions[index] if index is not None else None,
                     fx = fx, fy = fy, cx = cx, cy = cy
                 )
         camera.set_cam_intr(fx, fy, cx, cy)
@@ -629,7 +629,8 @@ class Playground:
                             psim.SameLine()
                             self._draw_single_vk_cam(idx, camera)
                     psim.Text(f"Origin camera = {self.novel_view_renderer.get_origin_camera_index()}")
-                
+                    psim.TreePop()
+
                 if psim.TreeNode("Save/Load Video trajectory"):
                     if self._trajectory_status:
                         psim.Text(self._trajectory_status)
@@ -679,6 +680,7 @@ class Playground:
                             poses_list = self.novel_view_renderer.get_trajectory_poses()
                             self.poses = poses_list
                             self._draw_cam_trajectory_view(self.poses)
+                            psim.TreePop()
 
                     psim.TreePop()
 
@@ -782,7 +784,6 @@ class Playground:
             #         up = view_params.get_up_dir()
             #         ps.look_at_dir(eye, target, up, fly_to=True)
 
-            psim.PopItemWidth()
             psim.TreePop()
     
     def populate_vid_trajectory(self, poses_list, idx=None):
@@ -851,7 +852,7 @@ class Playground:
                     [self.slice_plane_pos[sp_idx][0], self.slice_plane_pos[sp_idx][1], self.slice_plane_pos[sp_idx][2]],
                     v_min=-10.0, v_max=10.0,
                     format="%.2f",
-                    power=1.0
+                    
                 )
                 any_plane_changed |= changed
                 if changed:
@@ -864,7 +865,7 @@ class Playground:
                      self.slice_plane_normal[sp_idx][2]],
                     v_min=-180.0, v_max=180.0,
                     format="%.2f",
-                    power=1.0
+                    
                 )
                 any_plane_changed |= changed
                 if changed:
@@ -974,7 +975,7 @@ class Playground:
 
             psim.SameLine()
             settings_changed, self.engine.depth_of_field.aperture_size = psim.SliderFloat(
-                "Aperture Size", self.engine.depth_of_field.aperture_size, v_min=1e-5, v_max=1e-1, power=10)
+                "Aperture Size", self.engine.depth_of_field.aperture_size, v_min=1e-5, v_max=1e-1)
             self.is_force_canvas_dirty = self.is_force_canvas_dirty or settings_changed
 
             if self.engine.use_depth_of_field:
@@ -1041,7 +1042,7 @@ class Playground:
                         [material.diffuse_factor[0], material.diffuse_factor[1], material.diffuse_factor[2]],
                         v_min=0.0, v_max=1.4,
                         format="%.3f",
-                        power=1.0
+                        
                     )
                     if changed:
                         material.diffuse_factor[0] = values[0]
@@ -1054,7 +1055,7 @@ class Playground:
                         [material.emissive_factor[0], material.emissive_factor[1], material.emissive_factor[2]],
                         v_min=0.0, v_max=1.0,
                         format="%.3f",
-                        power=1.0
+                        
                     )
                     if changed:
                         material.emissive_factor[0] = values[0]
@@ -1063,25 +1064,25 @@ class Playground:
                         material_changed = True
 
                     changed, value = psim.SliderFloat("Metallic Factor", material.metallic_factor,
-                                                      v_min=0.0, v_max=1.0, power=1)
+                                                      v_min=0.0, v_max=1.0)
                     if changed:
                         material.metallic_factor = value
                         material_changed = True
 
                     changed, value = psim.SliderFloat("Roughness Factor", material.roughness_factor,
-                                                      v_min=0.0, v_max=1.0, power=1)
+                                                      v_min=0.0, v_max=1.0)
                     if changed:
                         material.roughness_factor = value
                         material_changed = True
 
                     changed, value = psim.SliderFloat("Transmission Factor", material.transmission_factor,
-                                                      v_min=0.0, v_max=1.0, power=1)
+                                                      v_min=0.0, v_max=1.0)
                     if changed:
                         material.transmission_factor = value
                         material_changed = True
 
                     changed, value = psim.SliderFloat("IOR", material.ior,
-                                                      v_min=0.2, v_max=2.0, power=1)
+                                                      v_min=0.2, v_max=2.0)
                     if changed:
                         material.ior = value
                         material_changed = True
@@ -1274,7 +1275,6 @@ class Playground:
                 object_transform.sx = sx
                 object_transform.sy = sy
                 transform_changed = True
-            psim.PopItemWidth()
 
             if transform_changed:
                 self.primitives.rebuild_bvh_if_needed(force=True, rebuild=False)
@@ -1295,7 +1295,7 @@ class Playground:
             #     [object_transform.tx, object_transform.ty, object_transform.tz],
             #     v_min=-5.0, v_max=5.0,
             #     format="%.4f",
-            #     power=1.0
+            #     
             # )
             # if changed:
             #     object_transform.tx = values[0]
@@ -1308,7 +1308,7 @@ class Playground:
             #     [object_transform.rx, object_transform.ry, object_transform.rz],
             #     v_min=-180.0, v_max=180.0,
             #     format="%.3f",
-            #     power=1.0
+            #     
             # )
             # if changed:
             #     object_transform.rx = values[0]
@@ -1321,7 +1321,7 @@ class Playground:
             #     [object_transform.sx, object_transform.sy, object_transform.sz],
             #     v_min=-5.0, v_max=5.0,
             #     format="%.4f",
-            #     power=1.0
+            #     
             # )
             # if changed:
             #     object_transform.sx = values[0]
@@ -1351,7 +1351,7 @@ class Playground:
 
     def _draw_glass_settings_widget(self, obj):
         settings_changed, obj.refractive_index = psim.SliderFloat(
-            "Refractive Index", obj.refractive_index, v_min=0.5, v_max=2.0, power=1)
+            "Refractive Index", obj.refractive_index, v_min=0.5, v_max=2.0)
         if settings_changed:
             self.primitives.recompute_stacked_buffers()
         self.is_force_canvas_dirty = self.is_force_canvas_dirty or settings_changed
@@ -1448,12 +1448,16 @@ class Playground:
         self.mcap_convertor.set_filepath()
         interval = self.mcap_convertor.calculate_time_interval()
         cam_names = ["CamA", "CamB", "CamC", "CamD"]
+        # Render a subset. Set to None for all four.
+        only_cams = None
         with open (self.mcap_convertor.output_fullpath, 'wb') as stream:
             writer = Writer(stream)
             writer.start(profile = "VisualKit")
             channels ={}
             num_frames = self.video_recorder.get_num_frames(len(poses)) # change to get this frm self.vid_recorder
             for cam_name in cam_names:
+                if only_cams and cam_name not in only_cams:
+                    continue
                 time_stamp = 0
                 self.video_recorder.reset_for_new_cam_path_export()
                 

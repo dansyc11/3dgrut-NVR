@@ -227,7 +227,8 @@ class NovelViewRenderer:
         """
 
         # If no cam_index is specified, assume the pose is for the origin camera.
-        if not cam_index:
+        # Only None means unspecified: index 0 (CamA) is a valid camera.
+        if cam_index is None:
             cam_index = self.get_origin_camera_index()
 
         #If is_6dof is not specified, pose is assumed to be a 4x4 view matrix
@@ -428,7 +429,9 @@ class VilotaDevice:
         elif self.name.startswith("DP180IP"):
             
             return VILOTA_CAM_MAP["DP180IP"]["cam_names"][index]
-        elif self.product_name_name.startswith("VKL-"):
+        elif self.product_name.startswith("VK180"):
+            return VILOTA_CAM_MAP["DP180IP"]["cam_names"][index]
+        elif self.product_name.startswith("VKL-"):
             return VILOTA_CAM_MAP["VKL"]["cam_names"][index]
         else:
             raise ValueError(f"Unknown camera index {index} for device {self.name}.")
@@ -506,8 +509,12 @@ class VilotaDevice:
         Returns:
             world_to_camd (np.ndarray): View matrix to origin camera
         """
+        # world_to_cami arrives in polyscope/OpenGL axes but the calibration
+        # extrinsic is in OpenCV axes: convert, compose, convert back so the
+        # returned origin view is in the same axes as the input.
+        F = np.diag([1.0, -1.0, -1.0, 1.0])
         cami_to_cam0 = self.extrinsics[cam_index]
-        world_to_camd = cami_to_cam0 @ world_to_cami
+        world_to_camd = F @ (cami_to_cam0 @ (F @ world_to_cami @ F)) @ F
 
         return world_to_camd
 
@@ -653,9 +660,17 @@ class Loader:
         extrinsic_matrix = build_extrinsic_mat_from_rotation_translation(rotation_matrix, translation_vector)
         print(f"Extrinsic Matrix {cam_rig_index}:\n{extrinsic_matrix}")
 
+        # The calibration extrinsic is cam_i->origin in OpenCV axes, but the
+        # camera stores world->cam_i in polyscope/OpenGL axes. Convert so the
+        # loaded pose equals what move_rig_to_view produces for an identity
+        # origin pose; storing extrinsic_matrix raw left the rig flipped and
+        # inverted until the first rig move.
+        F = np.diag([1.0, -1.0, -1.0, 1.0])
+        initial_view_matrix = F @ np.linalg.inv(extrinsic_matrix) @ F
+
         # Convert to Distortion Camera object
         distortion_camera = Camera.from_args(
-            view_matrix = torch.tensor(extrinsic_matrix, dtype=torch.float64, device=device),
+            view_matrix = torch.tensor(initial_view_matrix, dtype=torch.float64, device=device),
             focal_x = f_x,
             focal_y = f_y,
             x0 = c_x,

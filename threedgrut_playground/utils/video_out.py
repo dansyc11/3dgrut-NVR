@@ -16,6 +16,7 @@
 from __future__ import annotations
 import json
 import os
+import shutil
 from typing import List, Tuple, Union
 import numpy as np
 import torch
@@ -164,11 +165,9 @@ class VideoRecorder:
 
         cam_name = cam_name if cam_name else "CamX" 
         images_filename = f"./ecal_pub_sub/{cam_name}/"
-        if not os.path.exists(images_filename):
-            os.makedirs(images_filename)
-        else:
-            os.rmdir(images_filename)
-            os.makedirs(images_filename)
+        if os.path.exists(images_filename):
+            shutil.rmtree(images_filename)
+        os.makedirs(images_filename)
         camera_index = 0
         for camera in tqdm(interpolated_path):
             if not hasattr(camera, 'distortion_coefficients') or camera.distortion_coefficients is None:
@@ -349,6 +348,6 @@ class VideoRecorder:
         # Convert RGB to BGR for OpenCV compatibility
         bgr = cv2.cvtColor(bgr, cv2.COLOR_RGB2BGR)
         #print(f"BGR shape: {bgr.shape}, First pixel: {bgr[0, 0, :]}")
-        save_path = filepath + str(index).zfill(3) +".png"
+        save_path = filepath + str(index).zfill(5) +".png"
         cv2.imwrite(save_path, bgr)
         
