@@ -8,7 +8,7 @@ Run every command from the repo root, with the environment activated.
 
 The renderer's part of each process:
 
-* **Calibration process** — render AprilGrid boards through a device calibration you already know; the rest of the pipeline detects, solves and compares. Reference (three-board scene, sample device 30.02.0104): focal within 0.08 %, rotation within 0.05°, position within 0.5 mm of the device file.
+* **Calibration process** — render AprilGrid boards through a device calibration you already know; the rest of the pipeline detects, solves and compares. Reference (three-board scene, sample device 30.02.0104): focal about 0.08 %, rotation about 0.05°, position about 0.5 mm from the device file. A healthy run is within 0.1 %, 0.1° and 1 mm.
 * **VIO process** — design a trajectory, render along it and write its exact ground truth, then convert the images for vk_camera_driver. Reference (metric meeting room, 24 Sep 2026): aligned position RMS 8.2–16.7 mm over six replays, median 11.0 mm.
 
 Also here: the corner-level reprojection check, metric scale from a LiDAR scan, and fixes for splat training.

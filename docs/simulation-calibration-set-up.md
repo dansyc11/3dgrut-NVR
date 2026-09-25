@@ -412,7 +412,7 @@ for i, c in sorted(d['cameraData'], key=lambda x: x[0]):
 
 That also tells you which model each camera uses: a filled DS slot means Double Sphere, an empty one means KB4.
 
-Healthy: focal within 0.15%, principal point within 0.5 px (a known pixel-convention offset, harmless), reprojection \~0.41 px, `success = true`. Extrinsics are trustworthy too, verified 2026-08-27: rotations within 0.04° of the device file and translations within \~0.5% — **provided the tag size is 0.30**.
+Healthy: focal within 0.1 %, rotation within 0.1° and position within 1 mm of the device file, principal point within 0.5 px (a known pixel-convention offset, harmless), reprojection \~0.41 px, `success = true`. The verified three-board run lands at about 0.08 % focal, 0.05° rotation and 0.5 mm position. Extrinsics are trustworthy too, verified 2026-08-27: rotations within 0.04° of the device file and translations within \~0.5% — **provided the tag size is 0.30**.
 
 ## Step 6 (optional) — look at the detections
 
