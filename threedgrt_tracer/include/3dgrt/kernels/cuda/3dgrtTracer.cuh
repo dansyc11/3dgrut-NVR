@@ -166,29 +166,31 @@ static __device__ __inline__ void traceVolumetricGS(
             const RayHit rayHit = rayPayload[i];
 
             if ((rayHit.particleId != RayHit::InvalidParticleId) && (rayTransmittance > params.minTransmittance)) {
-                const float hitWeight = particleDensityProcessHitFwdFromBuffer(
+                // Vilota patch: same calls as the training kernel (referenceSlangOptix.cu)
+                float3 canonicalIntersection = make_float3(0.f);
+                const float hitWeight        = particleDensityProcessHitFwdFromBuffer(
                     rayOrigin,
                     rayDirection,
                     rayHit.particleId,
                     {{(gaussianParticle_RawParameters_0*)params.particleDensity, nullptr, true}},
                     &rayTransmittance,
                     &rayData.hitDistance,
+                    &canonicalIntersection,
 #ifdef ENABLE_NORMALS
-                    true, &rayData->normal
+                    true, &rayData.normal
 #else
                     false, nullptr
 #endif
                 );
 
-                // Call generic Slang wrapper (no conditionals)
-                // The wrapper handles CommonParameters construction internally
-                particleFeaturesIntegrateFwdGeneric(
+                particleFeaturesIntegrateFwdFromBuffer(
                     rayDirection,
+                    canonicalIntersection,
                     hitWeight,
                     rayHit.particleId,
-                    params.particleFeatures, // void* - generic buffer pointer
-                    params.sphDegree,        // auxiliary parameter (sphDegree for SH, unused for learned)
-                    rayData.features);       // float* - generic output array
+                    const_cast<TParticleFeatureElem*>(params.particleFeatures),
+                    params.sphDegree,
+                    reinterpret_cast<FixedArray<float, RAY_FEATURE_DIM>*>(rayData.features));
 
                 rayLastHitDistance = fmaxf(rayLastHitDistance, rayHit.distance);
 

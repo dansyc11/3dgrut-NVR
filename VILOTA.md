@@ -395,6 +395,12 @@ Put the device file in `calibration_files/`, load it in the GUI and pass it to e
 * Image MCAPs are big (1–4 GB) and regenerable. The tags MCAP, the trajectory CSV and the truth npz carry the evidence.
 * One calibration file per run, everywhere.
 
+## Patches on upstream code
+
+> ⚠️ **Vilota patch: the playground kernel on upstream's NHT features API.** Upstream 5f2e3a8 moved 3DGRT tracing to its NHT features API (`RayData.radiance` became `features[]`, and feature integration takes the hit's canonical intersection) but left the playground on the old API, so upstream's playground kernel fails to compile under NVRTC and `Tracer` never starts. The patch commit follows the training kernel `referenceSlangOptix.cu` in `threedgrt_tracer/include/3dgrt/kernels/cuda/3dgrtTracer.cuh`, `threedgrut_playground/include/playground/kernels/cuda/trace.cuh` and `threedgrut_playground/src/kernels/cuda/3dgrtKernel.cu`. Drop it once upstream fixes its playground; a merge conflict in those files is the sign.
+>
+> NHT-feature models are not supported in the playground. It renders spherical-harmonics models only and takes the first three ray features as the colour.
+
 ---
 
 ## The four repos
