@@ -347,7 +347,7 @@ python train.py --config-name apps/colmap_3dgut.yaml path=<colmap dataset> out_d
   ```
 
 * **Masks.** Put `<image stem>_mask.png` next to each image, in the same subfolder (single channel, 255 = valid). They zero the loss outside the lens's image circle, and validation PSNR counts valid pixels only.
-* **Fisheye cull cone.** `FISHEYE_MAX_ANGLE_DEG=105` clamps the fisheye max angle for lenses whose frame corners lie outside the image circle.
+* **Fisheye clamp: required for the meeting room and the main campus.** Prefix both `train.py` and `render.py` with `FISHEYE_MAX_ANGLE_DEG=105`. Without it the fisheye ray inversion starts past the peak of the lens's distortion curve and lands on the wrong branch, so about a third of one lens's valid pixels (meeting-room camera 2, main-campus camera 1) get rays 115–180° off axis; with it, no valid pixel on the meeting room does. The main-campus camera-1 masks reach about 10 px past that lens's peak radius, and those 2 % of valid pixels have no correct ray even with the clamp.
 * **Lower-degree SH.** PLY files with SH degree below 3 load (zero-padded). Start the camera at a pose for large scenes: `--initial_pose EX EY EZ TX TY TZ UX UY UZ`.
 * **Diagnostics.** `tools/fiord_gaussian_census.py <export.ply> <images.bin>` (CPU) and `tools/render_pose_diff.py --run_dir <run>` (GPU).
 
