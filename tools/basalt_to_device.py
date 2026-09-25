@@ -38,6 +38,7 @@ extrinsic rotation (deg) and position (mm) errors of the written file against
 REF, both relative to the reference camera, and checks the camera order: each
 camera's position must be nearest to its own socket's position in REF.
 """
+
 import argparse
 import copy
 import json
@@ -57,8 +58,7 @@ def se3(R, t):
 
 
 def basalt_pose(p):
-    return se3(Rot.from_quat([p["qx"], p["qy"], p["qz"], p["qw"]]).as_matrix(),
-               [p["px"], p["py"], p["pz"]])
+    return se3(Rot.from_quat([p["qx"], p["qy"], p["qz"], p["qw"]]).as_matrix(), [p["px"], p["py"], p["pz"]])
 
 
 def reference_socket(cams):
@@ -90,10 +90,14 @@ def convert(basalt_path, template_path):
         w, h = v["resolution"][i]
         tc = tpl_cams.get(sock)
         if tc is None or (tc["width"], tc["height"]) != (w, h):
-            raise ValueError(f"index {i} {name} -> socket {sock}: {w}x{h} does not match the "
-                             f"template's {None if tc is None else (tc['width'], tc['height'])}")
-        print(f"  {i}  {name:8} -> socket {sock} (Cam{LABEL[sock]})  "
-              f"{v['intrinsics'][i]['camera_type']:3}  {w}x{h}  matches template")
+            raise ValueError(
+                f"index {i} {name} -> socket {sock}: {w}x{h} does not match the "
+                f"template's {None if tc is None else (tc['width'], tc['height'])}"
+            )
+        print(
+            f"  {i}  {name:8} -> socket {sock} (Cam{LABEL[sock]})  "
+            f"{v['intrinsics'][i]['camera_type']:3}  {w}x{h}  matches template"
+        )
 
     T_imu = {sock: basalt_pose(v["T_imu_cam"][i]) for i, sock in enumerate(sockets)}
     T_imu_ref_inv = np.linalg.inv(T_imu[ref])
@@ -115,27 +119,38 @@ def convert(basalt_path, template_path):
             raise ValueError(f"index {i}: unsupported camera_type {intr['camera_type']}")
 
         if sock == ref:
-            ext = {"rotationMatrix": [], "specTranslation": {"x": 0.0, "y": 0.0, "z": 0.0},
-                   "toCameraSocket": -1, "translation": {"x": 0.0, "y": 0.0, "z": 0.0}}
+            ext = {
+                "rotationMatrix": [],
+                "specTranslation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "toCameraSocket": -1,
+                "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+            }
         else:
             T = T_imu_ref_inv @ T_imu[sock]
             t_cm = T[:3, 3] * 100.0
-            ext = {"rotationMatrix": T[:3, :3].tolist(),
-                   "specTranslation": {"x": -1.0, "y": 0.0, "z": 0.0},
-                   "toCameraSocket": ref,
-                   "translation": {"x": float(t_cm[0]), "y": float(t_cm[1]), "z": float(t_cm[2])}}
+            ext = {
+                "rotationMatrix": T[:3, :3].tolist(),
+                "specTranslation": {"x": -1.0, "y": 0.0, "z": 0.0},
+                "toCameraSocket": ref,
+                "translation": {"x": float(t_cm[0]), "y": float(t_cm[1]), "z": float(t_cm[2])},
+            }
 
         tc = tpl_cams[sock]
         w, h = v["resolution"][i]
-        out_cams[sock] = {"cameraType": cam_type, "distortionCoeff": [float(x) for x in dc],
-                          "extrinsics": ext, "height": int(h), "intrinsicMatrix": K,
-                          "lensPosition": tc.get("lensPosition", 0),
-                          "specHfovDeg": tc.get("specHfovDeg", 0.0), "width": int(w)}
+        out_cams[sock] = {
+            "cameraType": cam_type,
+            "distortionCoeff": [float(x) for x in dc],
+            "extrinsics": ext,
+            "height": int(h),
+            "intrinsicMatrix": K,
+            "lensPosition": tc.get("lensPosition", 0),
+            "specHfovDeg": tc.get("specHfovDeg", 0.0),
+            "width": int(w),
+        }
 
     serial = v.get("serial_number", "")
     if serial != tpl.get("deviceName"):
-        raise ValueError(f"Basalt serial_number {serial!r} != template deviceName "
-                         f"{tpl.get('deviceName')!r}")
+        raise ValueError(f"Basalt serial_number {serial!r} != template deviceName " f"{tpl.get('deviceName')!r}")
     out = copy.deepcopy(tpl)
     order = [int(s) for s, _ in tpl["cameraData"] if int(s) in out_cams]
     out["cameraData"] = [[s, out_cams[s]] for s in order]
@@ -157,8 +172,7 @@ def load_device(path_or_dict):
         dc = c["distortionCoeff"]
         if c["cameraType"] == 1:
             K = c["intrinsicMatrix"]
-            params = dict(fx=K[0][0], fy=K[1][1], cx=K[0][2], cy=K[1][2],
-                          k1=dc[0], k2=dc[1], k3=dc[2], k4=dc[3])
+            params = dict(fx=K[0][0], fy=K[1][1], cx=K[0][2], cy=K[1][2], k1=dc[0], k2=dc[1], k3=dc[2], k4=dc[3])
             kind = "kb4"
         else:
             params = dict(zip(("fx", "fy", "cx", "cy", "xi", "alpha"), dc[5:11]))
@@ -173,8 +187,10 @@ def compare(fit, reference):
     if ref_f != ref_g:
         raise ValueError(f"reference cameras differ: {ref_f} vs {ref_g}")
     print(f"\nfitted vs reference, extrinsics relative to Cam{LABEL[ref_g]} (socket {ref_g})")
-    hdr = (f"{'cam':3} {'model':5} {'fx %':>8} {'fy %':>8} {'cx px':>7} {'cy px':>7} | "
-           f"{'distortion rel %':34} | {'rot deg':>8} {'pos mm':>7}")
+    hdr = (
+        f"{'cam':3} {'model':5} {'fx %':>8} {'fy %':>8} {'cx px':>7} {'cy px':>7} | "
+        f"{'distortion rel %':34} | {'rot deg':>8} {'pos mm':>7}"
+    )
     print(hdr)
     print("-" * len(hdr))
     for sock in sorted(g):
@@ -192,10 +208,12 @@ def compare(fit, reference):
         # arccos((trace - 1) / 2) on them overstates angles below ~0.05 deg.
         rot = np.degrees(Rot.from_matrix(T_g[:3, :3].T @ T[:3, :3]).magnitude())
         pos = 1000.0 * np.linalg.norm(T[:3, 3] - T_g[:3, 3])
-        print(f"{LABEL[sock]:3} {kind:5} {100 * (p['fx'] - q['fx']) / q['fx']:+8.4f} "
-              f"{100 * (p['fy'] - q['fy']) / q['fy']:+8.4f} {p['cx'] - q['cx']:+7.3f} "
-              f"{p['cy'] - q['cy']:+7.3f} | {dist:34} | "
-              + ("       -       -" if sock == ref_g else f"{rot:8.4f} {pos:7.3f}"))
+        print(
+            f"{LABEL[sock]:3} {kind:5} {100 * (p['fx'] - q['fx']) / q['fx']:+8.4f} "
+            f"{100 * (p['fy'] - q['fy']) / q['fy']:+8.4f} {p['cx'] - q['cx']:+7.3f} "
+            f"{p['cy'] - q['cy']:+7.3f} | {dist:34} | "
+            + ("       -       -" if sock == ref_g else f"{rot:8.4f} {pos:7.3f}")
+        )
 
     print("\ncamera order check: fitted position vs every reference camera position [cm]")
     for sock in sorted(f):
@@ -203,16 +221,18 @@ def compare(fit, reference):
         nearest = min(d, key=d.get)
         runner = sorted(d.values())[1]
         verdict = "own socket" if nearest == sock else f"WRONG: nearest is Cam{LABEL[nearest]}"
-        print(f"  Cam{LABEL[sock]}: nearest reference camera Cam{LABEL[nearest]} at {d[nearest]:.3f} cm, "
-              f"next {runner:.3f} cm -> {verdict}")
+        print(
+            f"  Cam{LABEL[sock]}: nearest reference camera Cam{LABEL[nearest]} at {d[nearest]:.3f} cm, "
+            f"next {runner:.3f} cm -> {verdict}"
+        )
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("basalt", help="vk_calibrate / Basalt calibration JSON")
-    ap.add_argument("--template", required=True,
-                    help="device JSON of the same unit: socket layout, reference camera, IMU block")
+    ap.add_argument(
+        "--template", required=True, help="device JSON of the same unit: socket layout, reference camera, IMU block"
+    )
     ap.add_argument("--output", required=True)
     ap.add_argument("--compare", default="", help="device JSON to diff the written file against")
     args = ap.parse_args()
@@ -220,8 +240,10 @@ def main():
     out = convert(args.basalt, args.template)
     with open(args.output, "w") as fh:
         json.dump(out, fh, indent=4)
-    print(f"wrote {args.output}  (deviceName {out['deviceName']}, batchTime {out['batchTime']}; "
-          f"imuExtrinsics and non-camera fields copied from {os.path.basename(args.template)})")
+    print(
+        f"wrote {args.output}  (deviceName {out['deviceName']}, batchTime {out['batchTime']}; "
+        f"imuExtrinsics and non-camera fields copied from {os.path.basename(args.template)})"
+    )
     if args.compare:
         compare(args.output, args.compare)
 

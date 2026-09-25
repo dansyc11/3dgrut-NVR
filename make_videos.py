@@ -11,18 +11,19 @@ match, the script falls back to pairing by index and says so.
 
 import argparse
 import sys
-import numpy as np
+
 import cv2
+import numpy as np
 
 sys.path.append("/opt/vilota/messages")
 import capnp  # noqa: E402
+
 capnp.add_import_hook()
-import tagdetection_capnp as T  # noqa: E402
 import image_capnp as VKI  # noqa: E402
+import tagdetection_capnp as T  # noqa: E402
 from mcap.reader import make_reader  # noqa: E402
 
-PALETTE = [(60, 80, 230), (230, 180, 60), (40, 200, 250),
-           (120, 220, 120), (220, 120, 220), (50, 150, 255)]
+PALETTE = [(60, 80, 230), (230, 180, 60), (40, 200, 250), (120, 220, 120), (220, 120, 220), (50, 150, 255)]
 
 
 def flat_ints(d, prefix=""):
@@ -50,14 +51,14 @@ def decode_image(img):
         return None
     buf = np.frombuffer(img.data, dtype=np.uint8)
     if enc.endswith("mono8"):
-        g = buf[:h * step].reshape(h, step)[:, :w]
+        g = buf[: h * step].reshape(h, step)[:, :w]
         return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
     if enc.endswith("bgr8"):
-        return buf[:h * step].reshape(h, step)[:, :w * 3].reshape(h, w, 3).copy()
+        return buf[: h * step].reshape(h, step)[:, : w * 3].reshape(h, w, 3).copy()
     if enc.endswith("jpeg") or enc.endswith("png"):
         return cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if enc.endswith("yuv420") or enc.endswith("nv12"):
-        g = buf[:h * step].reshape(-1, step)[:h, :w]
+        g = buf[: h * step].reshape(-1, step)[:h, :w]
         return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
     return None
 
@@ -76,8 +77,16 @@ def draw_tags(canvas, tags, w, h, colors, thick):
         poly = xy.astype(np.int32).reshape(-1, 1, 2)
         cv2.polylines(canvas, [poly], True, colors[gid], thick, cv2.LINE_AA)
         c = xy.mean(0).astype(int)
-        cv2.putText(canvas, str(int(t.id)), (int(c[0]) - 8, int(c[1]) + 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, colors[gid], 1, cv2.LINE_AA)
+        cv2.putText(
+            canvas,
+            str(int(t.id)),
+            (int(c[0]) - 8, int(c[1]) + 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            colors[gid],
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def main():
@@ -129,8 +138,10 @@ def main():
             if writers is None:
                 W, H = int(w * a.scale), int(h * a.scale)
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writers = {k: cv2.VideoWriter(a.out + "_" + k + ".mp4", fourcc, a.fps, (W, H))
-                           for k in ("camera", "detections", "overlay")}
+                writers = {
+                    k: cv2.VideoWriter(a.out + "_" + k + ".mp4", fourcc, a.fps, (W, H))
+                    for k in ("camera", "detections", "overlay")
+                }
                 print("writing", W, "x", H, "at", a.fps, "fps")
 
             thick = max(1, int(round(2 * a.scale)))
@@ -139,8 +150,16 @@ def main():
             ovl = frame.copy()
             draw_tags(ovl, tags, w, h, colors, thick)
             grids = len({int(t.gridId) for t in tags})
-            cv2.putText(ovl, "frame %d   tags %d   grids %d" % (n, len(tags), grids),
-                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(
+                ovl,
+                "frame %d   tags %d   grids %d" % (n, len(tags), grids),
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
             for k, img in (("camera", frame), ("detections", det), ("overlay", ovl)):
                 if a.scale != 1.0:
@@ -152,8 +171,7 @@ def main():
 
     for wr in writers.values():
         wr.release()
-    print("frames written:", n, "  matched by stamp:", matched,
-          "  by index:", n - matched)
+    print("frames written:", n, "  matched by stamp:", matched, "  by index:", n - matched)
     print("grid colors:", colors)
     for k in ("camera", "detections", "overlay"):
         print("  ", a.out + "_" + k + ".mp4")

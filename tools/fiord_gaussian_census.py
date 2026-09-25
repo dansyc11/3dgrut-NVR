@@ -9,7 +9,10 @@ Baseline (unmasked run meetingroom-1409_132541): far-field dark&opaque
 cut this sharply; the near-camera bucket was clean even unmasked.
 CPU only.
 """
-import struct, sys
+
+import struct
+import sys
+
 import numpy as np
 from plyfile import PlyData
 
@@ -28,11 +31,13 @@ def read_images_bin_centers(path):
             npts = struct.unpack("<Q", f.read(8))[0]
             f.seek(24 * npts, 1)
             w, x, y, z = q
-            R = np.array([
-                [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-                [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-                [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-            ])
+            R = np.array(
+                [
+                    [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                    [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                    [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+                ]
+            )
             centers.append(-R.T @ t)
     return np.stack(centers)
 
@@ -43,21 +48,21 @@ def main(ply_path, images_bin):
     xyz = np.stack([np.asarray(v["x"]), np.asarray(v["y"]), np.asarray(v["z"])], axis=1)
     opacity = 1.0 / (1.0 + np.exp(-np.asarray(v["opacity"])))
     C0 = 0.28209479177387814
-    rgb = 0.5 + C0 * np.stack(
-        [np.asarray(v[f"f_dc_{i}"]) for i in range(3)], axis=1
-    )
+    rgb = 0.5 + C0 * np.stack([np.asarray(v[f"f_dc_{i}"]) for i in range(3)], axis=1)
     lum = rgb.clip(0, 1).mean(axis=1)
     N = xyz.shape[0]
     mind = np.empty(N, dtype=np.float32)
     for i in range(0, N, 200000):
-        d = np.linalg.norm(xyz[i:i + 200000, None, :] - centers[None], axis=2)
-        mind[i:i + 200000] = d.min(axis=1)
+        d = np.linalg.norm(xyz[i : i + 200000, None, :] - centers[None], axis=2)
+        mind[i : i + 200000] = d.min(axis=1)
     print(f"{N} gaussians, {len(centers)} cameras")
     for tag, m in (("near (<0.3)", mind < 0.3), ("far (rest)", mind >= 0.3)):
         dk = (lum[m] < 0.1) & (opacity[m] > 0.5)
-        print(f"{tag}: n={m.sum()} ({100 * m.mean():.1f}%) "
-              f"opacity_med={np.median(opacity[m]):.3f} lum_med={np.median(lum[m]):.3f} "
-              f"dark&opaque={dk.sum()} ({100 * dk.mean():.1f}%)")
+        print(
+            f"{tag}: n={m.sum()} ({100 * m.mean():.1f}%) "
+            f"opacity_med={np.median(opacity[m]):.3f} lum_med={np.median(lum[m]):.3f} "
+            f"dark&opaque={dk.sum()} ({100 * dk.mean():.1f}%)"
+        )
 
 
 if __name__ == "__main__":

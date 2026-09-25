@@ -80,8 +80,7 @@ def report(topic, counts, distances):
         ok = False
     if low * BUCKET_CORNERS_WORST_RATIO < avg:
         need = (avg + BUCKET_CORNERS_WORST_RATIO - 1) // BUCKET_CORNERS_WORST_RATIO
-        print(f"  FAIL  weakest bucket {low} against average {avg}, "
-              f"needs {need} or more")
+        print(f"  FAIL  weakest bucket {low} against average {avg}, " f"needs {need} or more")
         ok = False
 
     d_norm = []
@@ -91,10 +90,8 @@ def report(topic, counts, distances):
             d_norm.append(9.9)
             continue
         d_norm.append((ds[0] + ds[-1]) / 2)
-    print("  closest approach to corners: " + ", ".join(
-        f"{CORNER_LABELS[c]} {d_norm[c]:.3f}" for c in range(4)))
-    print(f"  (vk_calibrate compares these against {CORNER_NORMALISED_THRESHOLD} "
-          f"on a diagonal basis)")
+    print("  closest approach to corners: " + ", ".join(f"{CORNER_LABELS[c]} {d_norm[c]:.3f}" for c in range(4)))
+    print(f"  (vk_calibrate compares these against {CORNER_NORMALISED_THRESHOLD} " f"on a diagonal basis)")
 
     print("  PASS  count tests" if ok else "  dataset check would fail")
     return ok

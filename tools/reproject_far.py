@@ -55,6 +55,7 @@ target) is reported alongside to show what the source's detection noise and
 its calibration add.
 CPU only.
 """
+
 import argparse
 import csv
 import importlib.util
@@ -70,18 +71,28 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append("/opt/vilota/messages")
 sys.path.insert(0, REPO)
 import capnp  # noqa: E402
+
 capnp.add_import_hook()
 import tagdetection_capnp as T  # noqa: E402
 from mcap.reader import make_reader  # noqa: E402
-from threedgrut_playground.utils.boards import BOARD_SPECS, row_major_to_texture_order  # noqa: E402
 
-GRID_NAMES = {10534446874174779866: "grid_3x1", 2537504867360144137: "grid_2x2",
-              7341007258749575218: "aprilgrid", 4722288866674018535: "grid_off14",
-              9771855239151313725: "grid_off15", 12633434617871127365: "grid_off16"}
-CAM_NAMES = ["cama", "camb", "camc", "camd"]     # rig index -> topic name
+from threedgrut_playground.utils.boards import (  # noqa: E402
+    BOARD_SPECS,
+    row_major_to_texture_order,
+)
+
+GRID_NAMES = {
+    10534446874174779866: "grid_3x1",
+    2537504867360144137: "grid_2x2",
+    7341007258749575218: "aprilgrid",
+    4722288866674018535: "grid_off14",
+    9771855239151313725: "grid_off15",
+    12633434617871127365: "grid_off16",
+}
+CAM_NAMES = ["cama", "camb", "camc", "camd"]  # rig index -> topic name
 F = np.diag([1.0, -1.0, -1.0, 1.0])
-SQUARE, GAP = 800, 240          # boards.py build_materials(square=800), gap 0.3
-QUAD_Z_OFF = 2.5 * 0.5          # mesh_io MZ * autoscale sz
+SQUARE, GAP = 800, 240  # boards.py build_materials(square=800), gap 0.3
+QUAD_Z_OFF = 2.5 * 0.5  # mesh_io MZ * autoscale sz
 
 _spec = importlib.util.spec_from_file_location("viz_rerun", os.path.join(REPO, "viz_rerun.py"))
 viz = importlib.util.module_from_spec(_spec)
@@ -155,7 +166,8 @@ class DS:
             ok &= r2 <= lim
             r2 = np.minimum(r2, lim)
         mz = (1 - self.alpha * self.alpha * r2) / (
-            self.alpha * np.sqrt(np.maximum(1 - (2 * self.alpha - 1) * r2, 0.0)) + 1 - self.alpha)
+            self.alpha * np.sqrt(np.maximum(1 - (2 * self.alpha - 1) * r2, 0.0)) + 1 - self.alpha
+        )
         s = (mz * self.xi + np.sqrt(mz * mz + (1 - self.xi * self.xi) * r2)) / (mz * mz + r2)
         dirs = np.stack([s * mx, s * my, s * mz - self.xi], 1)
         return dirs / np.linalg.norm(dirs, axis=1, keepdims=True), ok
@@ -173,8 +185,11 @@ def load_cams(path):
         T_D_i = np.eye(4)
         T_D_i[:3, :3], T_D_i[:3, 3] = R, t
         dc = c["distortionCoeff"]
-        model = (KB4(c["intrinsicMatrix"], dc, c["width"], c["height"]) if c["cameraType"] == 1
-                 else DS(dc, c["width"], c["height"]))
+        model = (
+            KB4(c["intrinsicMatrix"], dc, c["width"], c["height"])
+            if c["cameraType"] == 1
+            else DS(dc, c["width"], c["height"])
+        )
         cams[int(idx)] = (model, T_D_i)
     return cams
 
@@ -238,7 +253,7 @@ def board_corners_3d(entry):
         sx, sy = viz.board_half_extents(rows, cols, entry.get("tag_cm", 15.0))
     W = SQUARE * cols + GAP * (cols - 1) + 2 * GAP
     H = SQUARE * rows + GAP * (rows - 1) + 2 * GAP
-    order = row_major_to_texture_order(ids, rows, cols)   # texture walks top row first
+    order = row_major_to_texture_order(ids, rows, cols)  # texture walks top row first
     R = viz.rot_matrix(entry.get("rot", [0, 0, 0]))
     pos = np.array(entry["pos"], float)
     out = {}
@@ -247,8 +262,7 @@ def board_corners_3d(entry):
             x0 = GAP + c * (SQUARE + GAP)
             y0 = GAP + tr * (SQUARE + GAP)
             px = np.array([[x0, y0], [x0 + SQUARE, y0], [x0 + SQUARE, y0 + SQUARE], [x0, y0 + SQUARE]], float)
-            local = np.stack([(2 * px[:, 0] / W - 1) * sx, (2 * px[:, 1] / H - 1) * sy,
-                              np.full(4, QUAD_Z_OFF)], 1)
+            local = np.stack([(2 * px[:, 0] / W - 1) * sx, (2 * px[:, 1] / H - 1) * sy, np.full(4, QUAD_Z_OFF)], 1)
             out[order[tr * cols + c]] = local @ R.T + pos
     return out
 
@@ -282,16 +296,18 @@ def read_detections(path, stride, n_poses, boards, wanted):
                 for t in m.tags:
                     name = GRID_NAMES.get(int(t.gridId))
                     if name in boards and int(t.id) in boards[name]:
-                        det[cam][name].append((seq, int(t.id),
-                                               np.array(t.pointsPolygon, float)[:8].reshape(4, 2) * [w, h]))
+                        det[cam][name].append(
+                            (seq, int(t.id), np.array(t.pointsPolygon, float)[:8].reshape(4, 2) * [w, h])
+                        )
                         kept += 1
                     else:
                         stray[(cam, GRID_NAMES.get(int(t.gridId), int(t.gridId)))] += 1
     if stray:
         total = sum(stray.values())
-        print(f"discarded {total} stray detections not on a scene board "
-              f"(kept {kept}): " + ", ".join(
-                  f"{cam}/{g}={n}" for (cam, g), n in sorted(stray.items(), key=str)))
+        print(
+            f"discarded {total} stray detections not on a scene board "
+            f"(kept {kept}): " + ", ".join(f"{cam}/{g}={n}" for (cam, g), n in sorted(stray.items(), key=str))
+        )
     else:
         print(f"no stray detections; kept {kept}")
     return det
@@ -313,27 +329,35 @@ def match_order(meas, proj):
 
 # ------------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tags", required=True, help="tags mcap the detector wrote for the render")
     ap.add_argument("--traj", required=True, help="trajectory CSV that drove the render (row index = header.seq)")
     ap.add_argument("--scene", required=True, help="scene JSON with the render's board placements, e.g. far_10m.json")
     ap.add_argument("--calib", default=os.path.join(REPO, "calibration_files/DP180IP-30020104.json"))
     ap.add_argument("--stride", type=int, default=1, help="use every Nth frame")
     ap.add_argument("--cams", default="cama,camb,camc,camd")
-    ap.add_argument("--swap", default="",
-                    help="camX,camY: project each one's detections through the other's calibration entry")
-    ap.add_argument("--remove-rotation", action="store_true",
-                    help="with --swap: keep each camera's own extrinsic rotation")
-    ap.add_argument("--remove-translation", action="store_true",
-                    help="with --swap: keep each camera's own extrinsic translation")
+    ap.add_argument(
+        "--swap", default="", help="camX,camY: project each one's detections through the other's calibration entry"
+    )
+    ap.add_argument(
+        "--remove-rotation", action="store_true", help="with --swap: keep each camera's own extrinsic rotation"
+    )
+    ap.add_argument(
+        "--remove-translation", action="store_true", help="with --swap: keep each camera's own extrinsic translation"
+    )
     ap.add_argument("--plot", default="", help="with --swap: error-vs-field-angle overlay PNG")
-    ap.add_argument("--cross", default="",
-                    help="camSRC,camTGT: ray-cast SRC detections onto the true board plane, "
-                         "project the 3D points into TGT, compare with TGT detections")
-    ap.add_argument("--fitted-calib", action="store_true",
-                    help="--calib was fitted from detections (vk_calibrate): drop the render's "
-                         "half-pixel shift; leave off for the device file that drove the render")
+    ap.add_argument(
+        "--cross",
+        default="",
+        help="camSRC,camTGT: ray-cast SRC detections onto the true board plane, "
+        "project the 3D points into TGT, compare with TGT detections",
+    )
+    ap.add_argument(
+        "--fitted-calib",
+        action="store_true",
+        help="--calib was fitted from detections (vk_calibrate): drop the render's "
+        "half-pixel shift; leave off for the device file that drove the render",
+    )
     args = ap.parse_args()
     half_px = 0.0 if args.fitted_calib else 0.5
     wanted = [c.strip() for c in args.cams.split(",")]
@@ -354,17 +378,19 @@ def main():
                 T[:3, 3] = cams[me][1][:3, 3]
             used[me] = (model_o, T)
         swapped = [CAM_NAMES[a], CAM_NAMES[b]]
-        print(f"--swap: {swapped[0]} <-> {swapped[1]} calibration entries"
-              + (" (own rotation kept)" if args.remove_rotation else "")
-              + (" (own translation kept)" if args.remove_translation else ""))
-    rows = [[float(r[k]) for k in ("x", "y", "z", "roll", "pitch", "yaw")]
-            for r in csv.DictReader(open(args.traj))]
-    scene_boards = [b for b in json.load(open(args.scene))["boards"]
-                    if b["material"] in GRID_NAMES.values()]
+        print(
+            f"--swap: {swapped[0]} <-> {swapped[1]} calibration entries"
+            + (" (own rotation kept)" if args.remove_rotation else "")
+            + (" (own translation kept)" if args.remove_translation else "")
+        )
+    rows = [[float(r[k]) for k in ("x", "y", "z", "roll", "pitch", "yaw")] for r in csv.DictReader(open(args.traj))]
+    scene_boards = [b for b in json.load(open(args.scene))["boards"] if b["material"] in GRID_NAMES.values()]
     boards = {b["material"]: board_corners_3d(b) for b in scene_boards}
     planes = {b["material"]: board_plane(b) for b in scene_boards}
-    print(f"{len(rows)} poses, boards {list(boards)}, cameras {wanted}, calib {os.path.basename(args.calib)}"
-          + (" (--fitted-calib: no half-pixel shift)" if args.fitted_calib else ""))
+    print(
+        f"{len(rows)} poses, boards {list(boards)}, cameras {wanted}, calib {os.path.basename(args.calib)}"
+        + (" (--fitted-calib: no half-pixel shift)" if args.fitted_calib else "")
+    )
     det = read_detections(args.tags, args.stride, len(rows), boards, wanted)
 
     results = {}
@@ -405,27 +431,41 @@ def main():
             # the corner order is decided on the true projection (the floor)
             r_floor, shift = match_order(meas, proj)
             e = np.linalg.norm(r_floor, axis=2)
-            R = dict(n=e.size, tags=len(e), frames=len(by_seq), med=np.median(e),
-                     p95=np.percentile(e, 95), mean=e.mean(), shift=shift,
-                     per_corner=np.median(e, axis=0), e=e, ang=ang)
+            R = dict(
+                n=e.size,
+                tags=len(e),
+                frames=len(by_seq),
+                med=np.median(e),
+                p95=np.percentile(e, 95),
+                mean=e.mean(),
+                shift=shift,
+                per_corner=np.median(e, axis=0),
+                e=e,
+                ang=ang,
+            )
             if is_swap:
                 s_, rev = shift
                 order = np.roll(np.arange(4)[::rev], s_)
                 proj_u = np.array(proj_u)[:, order]
-                r = meas - proj_u                     # measured swap residual
-                expct = proj[:, order] - proj_u       # model prediction at these corners
-                R.update(r=r, expct=expct, e_swap=np.linalg.norm(r, axis=2),
-                         med_swap=np.median(np.linalg.norm(r, axis=2)))
+                r = meas - proj_u  # measured swap residual
+                expct = proj[:, order] - proj_u  # model prediction at these corners
+                R.update(
+                    r=r, expct=expct, e_swap=np.linalg.norm(r, axis=2), med_swap=np.median(np.linalg.norm(r, axis=2))
+                )
             results[(cam, name)] = R
 
     print("\ncorner-level residual |detected - projected| [px]  (shift = detector index of texture TL, reversed?)")
-    hdr = (f"{'cam':5} {'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'median':>7} {'p95':>7} {'mean':>7} | "
-           f"{'per-corner medians':>28} | shift")
+    hdr = (
+        f"{'cam':5} {'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'median':>7} {'p95':>7} {'mean':>7} | "
+        f"{'per-corner medians':>28} | shift"
+    )
     print(hdr)
     print("-" * len(hdr))
     for (cam, name), R in results.items():
-        print(f"{cam:5} {name:11} {R['frames']:6d} {R['tags']:6d} {R['n']:7d} | {R['med']:7.3f} {R['p95']:7.3f} {R['mean']:7.3f} | "
-              f"{' '.join(f'{v:6.3f}' for v in R['per_corner'])} | {R['shift']}")
+        print(
+            f"{cam:5} {name:11} {R['frames']:6d} {R['tags']:6d} {R['n']:7d} | {R['med']:7.3f} {R['p95']:7.3f} {R['mean']:7.3f} | "
+            f"{' '.join(f'{v:6.3f}' for v in R['per_corner'])} | {R['shift']}"
+        )
     print("\nper camera, all boards pooled (true calibration = the floor):")
     for cam in wanted:
         es = [R["e"] for (c, _), R in results.items() if c == cam]
@@ -485,11 +525,11 @@ def report_cross(args, cams, rows, boards, planes, det):
             view_s = cam_view(view_d, T_s)
             view_t = cam_view(view_d, T_t)
             Rs = view_s[:3, :3]
-            C = -Rs.T @ view_s[:3, 3]           # source camera centre, world
+            C = -Rs.T @ view_s[:3, 3]  # source camera centre, world
             for tid in shared:
                 px_s, px_t = by_seq_s[seq][tid], by_seq_t[seq][tid]
                 dcv, ok_u = model_s.unproject(px_s + half_px)  # detector -> model convention
-                dw = (dcv * S) @ Rs                          # rows: Rs.T @ (S d_cv)
+                dw = (dcv * S) @ Rs  # rows: Rs.T @ (S d_cv)
                 den = dw @ nrm
                 good = np.abs(den) > 1e-9
                 tt = np.where(good, ((p0 - C) @ nrm) / np.where(good, den, 1.0), -1.0)
@@ -512,32 +552,47 @@ def report_cross(args, cams, rows, boards, planes, det):
         r_gt, shift = match_order(meas, proj_gt)
         s_, rev = shift
         order = np.roll(np.arange(4)[::rev], s_)
-        per[name] = dict(frames=len(frames), tags=len(err_c), dropped=dropped, shift=shift,
-                         e_c=np.linalg.norm(err_c, axis=2), ang_c=np.array(ang_c),
-                         e_g=np.linalg.norm(r_gt, axis=2), ang_g=np.array(ang_g)[:, order])
+        per[name] = dict(
+            frames=len(frames),
+            tags=len(err_c),
+            dropped=dropped,
+            shift=shift,
+            e_c=np.linalg.norm(err_c, axis=2),
+            ang_c=np.array(ang_c),
+            e_g=np.linalg.norm(r_gt, axis=2),
+            ang_g=np.array(ang_g)[:, order],
+        )
     if not per:
         print(f"\n--cross {src},{tgt}: no co-visible tags")
         return
 
-    print(f"\n--cross {src} -> {tgt}: {src} corner -> own ray -> true board plane -> "
-          f"3D point -> {tgt} projection, vs {tgt}'s detection [px]")
-    hdr = (f"{'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'cross med':>9} {'p95':>8} | "
-           f"{'truth med':>9} {'p95':>8} | shift")
+    print(
+        f"\n--cross {src} -> {tgt}: {src} corner -> own ray -> true board plane -> "
+        f"3D point -> {tgt} projection, vs {tgt}'s detection [px]"
+    )
+    hdr = (
+        f"{'board':11} {'frames':>6} {'tags':>6} {'corners':>7} | {'cross med':>9} {'p95':>8} | "
+        f"{'truth med':>9} {'p95':>8} | shift"
+    )
     print(hdr)
     print("-" * len(hdr))
     for name, P in per.items():
-        print(f"{name:11} {P['frames']:6d} {P['tags']:6d} {P['e_c'].size:7d} | "
-              f"{np.median(P['e_c']):9.3f} {np.percentile(P['e_c'], 95):8.3f} | "
-              f"{np.median(P['e_g']):9.3f} {np.percentile(P['e_g'], 95):8.3f} | {P['shift']}"
-              + (f"   ({P['dropped']} tags dropped)" if P["dropped"] else ""))
+        print(
+            f"{name:11} {P['frames']:6d} {P['tags']:6d} {P['e_c'].size:7d} | "
+            f"{np.median(P['e_c']):9.3f} {np.percentile(P['e_c'], 95):8.3f} | "
+            f"{np.median(P['e_g']):9.3f} {np.percentile(P['e_g'], 95):8.3f} | {P['shift']}"
+            + (f"   ({P['dropped']} tags dropped)" if P["dropped"] else "")
+        )
     e_c = np.concatenate([P["e_c"].ravel() for P in per.values()])
     e_g = np.concatenate([P["e_g"].ravel() for P in per.values()])
     ang_c = np.concatenate([P["ang_c"].ravel() for P in per.values()])
     ang_g = np.concatenate([P["ang_g"].ravel() for P in per.values()])
-    print(f"{'ALL':11} {sum(P['frames'] for P in per.values()):6d} "
-          f"{sum(P['tags'] for P in per.values()):6d} {e_c.size:7d} | "
-          f"{np.median(e_c):9.3f} {np.percentile(e_c, 95):8.3f} | "
-          f"{np.median(e_g):9.3f} {np.percentile(e_g, 95):8.3f} |")
+    print(
+        f"{'ALL':11} {sum(P['frames'] for P in per.values()):6d} "
+        f"{sum(P['tags'] for P in per.values()):6d} {e_c.size:7d} | "
+        f"{np.median(e_c):9.3f} {np.percentile(e_c, 95):8.3f} | "
+        f"{np.median(e_g):9.3f} {np.percentile(e_g, 95):8.3f} |"
+    )
 
     bins = np.arange(0, 90.1, 2.0)
     xc, yc = _binned(ang_c, e_c, bins)
@@ -554,22 +609,26 @@ def report_swap(results, swapped, cams, used, args):
     vector), residual after removing it, the model prediction at the same
     corners, and the uniform-field --same-pose prediction."""
     print(f"\nswap residual |detected - projected through the swapped entry| [px]")
-    hdr = (f"{'cam':5} {'board':11} {'corners':>7} | {'median':>8} {'p95':>8} | {'offset du':>9} {'dv':>8} "
-           f"| {'after offset':>12} {'p95':>8} | {'model at corners':>16} {'p95':>8}")
+    hdr = (
+        f"{'cam':5} {'board':11} {'corners':>7} | {'median':>8} {'p95':>8} | {'offset du':>9} {'dv':>8} "
+        f"| {'after offset':>12} {'p95':>8} | {'model at corners':>16} {'p95':>8}"
+    )
     print(hdr)
     print("-" * len(hdr))
     pooled = {}
     for cam in swapped:
         rs = [(R["r"], R["expct"], R["ang"], name) for (c, name), R in results.items() if c == cam and "r" in R]
         if not rs:
-            continue          # the other half of the pair was not in --cams
+            continue  # the other half of the pair was not in --cams
         for r, ex, ang, name in rs:
             off = r.reshape(-1, 2).mean(0)
             m, p = _stats(r)
             m2, p2 = _stats(r - off)
             m3, p3 = _stats(ex - ex.reshape(-1, 2).mean(0))
-            print(f"{cam:5} {name:11} {r.shape[0] * 4:7d} | {m:8.3f} {p:8.3f} | {off[0]:+9.3f} {off[1]:+8.3f} "
-                  f"| {m2:12.3f} {p2:8.3f} | {m3:16.3f} {p3:8.3f}")
+            print(
+                f"{cam:5} {name:11} {r.shape[0] * 4:7d} | {m:8.3f} {p:8.3f} | {off[0]:+9.3f} {off[1]:+8.3f} "
+                f"| {m2:12.3f} {p2:8.3f} | {m3:16.3f} {p3:8.3f}"
+            )
         r = np.concatenate([x[0] for x in rs]).reshape(-1, 2)
         ex = np.concatenate([x[1] for x in rs]).reshape(-1, 2)
         ang = np.concatenate([x[2] for x in rs]).ravel()
@@ -581,13 +640,23 @@ def report_swap(results, swapped, cams, used, args):
         ang_u, d_u = uniform_swap_prediction(cams[ci][0], used[ci][0])
         off_u = d_u.mean(0)
         m4, p4 = _stats(d_u - off_u)
-        print(f"{cam:5} {'ALL':11} {len(r):7d} | {m:8.3f} {p:8.3f} | {off[0]:+9.3f} {off[1]:+8.3f} "
-              f"| {m2:12.3f} {p2:8.3f} | {m3:16.3f} {p3:8.3f}")
-        print(f"      model offset at corners ({off_ex[0]:+.3f}, {off_ex[1]:+.3f}); uniform-field --same-pose "
-              f"prediction: offset ({off_u[0]:+.3f}, {off_u[1]:+.3f}), after offset median {m4:.3f} p95 {p4:.3f}; "
-              f"corners span field angle {ang.min():.1f}..{ang.max():.1f} deg")
-        pooled[cam] = (ang, np.linalg.norm(r - off, axis=1), np.linalg.norm(ex - off_ex, axis=1),
-                       ang_u, np.linalg.norm(d_u - off_u, axis=1), (m2, p2, m3, p3, m4, p4))
+        print(
+            f"{cam:5} {'ALL':11} {len(r):7d} | {m:8.3f} {p:8.3f} | {off[0]:+9.3f} {off[1]:+8.3f} "
+            f"| {m2:12.3f} {p2:8.3f} | {m3:16.3f} {p3:8.3f}"
+        )
+        print(
+            f"      model offset at corners ({off_ex[0]:+.3f}, {off_ex[1]:+.3f}); uniform-field --same-pose "
+            f"prediction: offset ({off_u[0]:+.3f}, {off_u[1]:+.3f}), after offset median {m4:.3f} p95 {p4:.3f}; "
+            f"corners span field angle {ang.min():.1f}..{ang.max():.1f} deg"
+        )
+        pooled[cam] = (
+            ang,
+            np.linalg.norm(r - off, axis=1),
+            np.linalg.norm(ex - off_ex, axis=1),
+            ang_u,
+            np.linalg.norm(d_u - off_u, axis=1),
+            (m2, p2, m3, p3, m4, p4),
+        )
 
     bins = np.arange(0, 90.1, 2.0)
     print("\nerror vs field angle from the camera's own optical axis, offset removed (2 deg bins, median px):")
@@ -599,17 +668,30 @@ def report_swap(results, swapped, cams, used, args):
         for x, m_ in zip(xm, ym):
             a = yx[np.isclose(xx, x)]
             u = yu[np.isclose(xu, x)]
-            print(f"         {x:6.0f} {m_:9.3f} {a[0] if a.size else float('nan'):14.3f} {u[0] if u.size else float('nan'):10.3f}")
+            print(
+                f"         {x:6.0f} {m_:9.3f} {a[0] if a.size else float('nan'):14.3f} {u[0] if u.size else float('nan'):10.3f}"
+            )
 
     if not args.plot:
         return
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     COL = {"measured": "#2a78d6", "model at corners": "#eb6834", "same-pose prediction": "#1baf7a"}
-    plt.rcParams.update({"font.size": 9, "axes.grid": True, "grid.color": "#e6e5e1",
-                         "axes.spines.top": False, "axes.spines.right": False,
-                         "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "legend.frameon": False})
+    plt.rcParams.update(
+        {
+            "font.size": 9,
+            "axes.grid": True,
+            "grid.color": "#e6e5e1",
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "figure.facecolor": "#fcfcfb",
+            "axes.facecolor": "#fcfcfb",
+            "legend.frameon": False,
+        }
+    )
     fig, axs = plt.subplots(1, len(pooled), figsize=(5.5 * len(pooled), 4.2), squeeze=False)
     for ax, (cam, (ang, e_m, e_x, ang_u, e_u, st)) in zip(axs[0], pooled.items()):
         for (lab, col), (a_, e_) in zip(COL.items(), ((ang, e_m), (ang, e_x), (ang_u, e_u))):
@@ -617,10 +699,15 @@ def report_swap(results, swapped, cams, used, args):
             ax.plot(x, y, "-", color=col, lw=2, label=lab)
         ax.set_xlabel(f"field angle from {cam}'s optical axis [deg]")
         ax.set_ylabel("median error after constant offset [px]")
-        ax.set_title(f"{cam} with the {[c for c in swapped if c != cam][0]} entry"
-                     + (" (own R)" if args.remove_rotation else "") + (" (own t)" if args.remove_translation else "")
-                     + f"\nmedian/p95: measured {st[0]:.2f}/{st[1]:.2f}, model@corners {st[2]:.2f}/{st[3]:.2f}, "
-                     f"same-pose {st[4]:.2f}/{st[5]:.2f}", loc="left", fontsize=9)
+        ax.set_title(
+            f"{cam} with the {[c for c in swapped if c != cam][0]} entry"
+            + (" (own R)" if args.remove_rotation else "")
+            + (" (own t)" if args.remove_translation else "")
+            + f"\nmedian/p95: measured {st[0]:.2f}/{st[1]:.2f}, model@corners {st[2]:.2f}/{st[3]:.2f}, "
+            f"same-pose {st[4]:.2f}/{st[5]:.2f}",
+            loc="left",
+            fontsize=9,
+        )
         ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(args.plot, dpi=140)

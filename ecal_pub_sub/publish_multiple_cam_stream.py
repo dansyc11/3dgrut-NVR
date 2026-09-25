@@ -1,62 +1,58 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 import sys
 import time
 
-import argparse
+# sys.path.insert(0, '/usr/lib/python3/dist-packages')
+import ecal.core.core as ecal_core
 import numpy as np
 
-#sys.path.insert(0, '/usr/lib/python3/dist-packages')
-import ecal.core.core as ecal_core
-
-sys.path.append('/opt/vilota/bin')
-sys.path.append('/opt/vilota/python')
+sys.path.append("/opt/vilota/bin")
+sys.path.append("/opt/vilota/python")
 
 
-from capnp_publisher import CapnpPublisher
 import capnp
+from capnp_publisher import CapnpPublisher
 
-sys.path.append('/opt/vilota/messages')
+sys.path.append("/opt/vilota/messages")
 capnp.add_import_hook()
 
+import argparse
+import os
+import sys
+import threading
+import time
+
+import capnp
+import ecal.core.core as ecal_core
 import image_capnp as eCALImage
-import threading, time, argparse, numpy as np, ecal.core.core as ecal_core
+import numpy as np
+from capnp_publisher import CapnpPublisher
 
 #!/usr/bin/env python3
 
-import os
-import sys
-import time
-import argparse
-import threading
-
-import numpy as np
-import ecal.core.core as ecal_core
-from capnp_publisher import CapnpPublisher
-import capnp
 
 # Setup Cap'n Proto import paths
-sys.path.append('/opt/vilota/messages')
+sys.path.append("/opt/vilota/messages")
 capnp.add_import_hook()
-import image_capnp as eCALImage
-
-
-#!/usr/bin/env python3
-
 import os
 import sys
 import time
-import numpy as np
-import ecal.core.core as ecal_core
 
-
-from capnp_publisher import CapnpPublisher
 import capnp
 import cv2
+import ecal.core.core as ecal_core
+import image_capnp as eCALImage
+import numpy as np
+from capnp_publisher import CapnpPublisher
+
+#!/usr/bin/env python3
+
 
 # Ensure Cap'n Proto imports work
-sys.path.append('/opt/vilota/messages')
+sys.path.append("/opt/vilota/messages")
 capnp.add_import_hook()
 import image_capnp as eCALImage
 
@@ -69,30 +65,32 @@ def create_publisher(cam_name: str, fps: int = 30) -> CapnpPublisher:
     pub = CapnpPublisher(topic, "Image")
     return pub
 
-def convert_bgr_to_yuv420(bgr: np.ndarray) -> np.ndarray:
-        """
-        Converts the BGR array loaded from the file to YUV420 numpy array to be published as imageMsg.data
-        with encoding yuv420
-        """
-        
-        yuv420 = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
 
-        return yuv420
-    
+def convert_bgr_to_yuv420(bgr: np.ndarray) -> np.ndarray:
+    """
+    Converts the BGR array loaded from the file to YUV420 numpy array to be published as imageMsg.data
+    with encoding yuv420
+    """
+
+    yuv420 = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
+
+    return yuv420
+
 
 def load_frames_npz(cam_name: str = "CamX"):
-    filepath = f'./{cam_name}.npz'
+    filepath = f"./{cam_name}.npz"
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"No frames found for camera {cam_name}. Please ensure the file {filepath} exists.")
     data = np.load(filepath)
-    frames = data['frames']
-    #print("Frames shape:", frames.shape)
+    frames = data["frames"]
+    # print("Frames shape:", frames.shape)
     return frames
+
 
 def load_frames_bgr_from_png_folder(cam_name: str = "CamX"):
     folder = f"./{cam_name}/"
     # get list of PNGs first
-    pngs = sorted(f for f in os.listdir(folder) if f.endswith('.png'))
+    pngs = sorted(f for f in os.listdir(folder) if f.endswith(".png"))
     # read one to get shape
     sample = cv2.imread(os.path.join(folder, pngs[0]))
     n, h, w, c = len(pngs), *sample.shape
@@ -101,7 +99,8 @@ def load_frames_bgr_from_png_folder(cam_name: str = "CamX"):
         frames[i] = cv2.imread(os.path.join(folder, fname))
     return frames
 
-def build_image_message(img_array : np.ndarray, index: int, cam_index:int, name:str, encoding:str):
+
+def build_image_message(img_array: np.ndarray, index: int, cam_index: int, name: str, encoding: str):
     """
     Builds a Capnp image message from a (h, w, 3) numpy array
     representing one single image in the sequence indexed by an int
@@ -123,10 +122,11 @@ def build_image_message(img_array : np.ndarray, index: int, cam_index:int, name:
     msg.gain = 180
     msg.sensorIdx = cam_index
     msg.streamName = name
-    #msg.mipMapBrightness = 180
-    #print(type(msg))
-    #print("Success!")
-    return msg   
+    # msg.mipMapBrightness = 180
+    # print(type(msg))
+    # print("Success!")
+    return msg
+
 
 import time
 
@@ -151,7 +151,7 @@ def main():
     for cam in cams:
         publisher = create_publisher(cam)
         publishers.append(publisher)
-        frames = load_frames_npz(cam_name = cam)
+        frames = load_frames_npz(cam_name=cam)
         all_frames.append(frames)
 
     num_frames = all_frames[0].shape[0]
@@ -159,10 +159,10 @@ def main():
 
     cam_index = 0
 
-    #pub_index = 0
+    # pub_index = 0
     while ecal_core.ok():
         num_cams = len(cams)
-        
+
         for i in range(num_frames):
             for cam_index in range(num_cams):
                 cam_pub = publishers[cam_index]
@@ -170,20 +170,17 @@ def main():
                 name = cams[cam_index]
                 msg = build_image_message(cam_frames[i], i, cam_index, name, encoding="bgr8")
                 cam_pub.send(msg.to_bytes())
-                #time.sleep(0.004)
-            time.sleep(1/10)
+                # time.sleep(0.004)
+            time.sleep(1 / 10)
             # if i == num_frames - 1:
             #     # ended[cam_index] = True
             #     break
-        
+
         print("Published all frames and exiting. You may Ctrl+C on the recording command now.")
-            
-        break    
-        
-            # print("Published all frames, exiting...")
-        
-        
-   
+
+        break
+
+        # print("Published all frames, exiting...")
 
 
 if __name__ == "__main__":

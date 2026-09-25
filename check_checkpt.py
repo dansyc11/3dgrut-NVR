@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-import torch
 import os
+
+import torch
 
 print("Working directory:", os.getcwd())
 

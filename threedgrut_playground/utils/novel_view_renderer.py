@@ -1,17 +1,19 @@
-from copy import Error
 import csv
-from threedgrut_playground.utils.distortion_camera import DistortionCamera as Camera
-import torch
-import os
-import json
-from typing import List, Tuple, Union
-import numpy as np
 import functools
+import json
+import os
+from copy import Error
+from typing import List, Tuple, Union
+
+import numpy as np
+import torch
 from scipy.spatial.transform import Rotation as R
+
+from threedgrut_playground.utils.distortion_camera import DistortionCamera as Camera
 
 # UTILITIES:
 # 1. view_matrix_from_rotation_translation
-# - Constructs a 4x4 view matrix from rotation and translation, 
+# - Constructs a 4x4 view matrix from rotation and translation,
 # 2. build_extrinsic_mat_from_rotation_translation
 #   Constructs a 4x4 view matrix from rotation and translation, overriding zero-rotation for Cam 0 if needed,
 #   and applying a global offset so all cameras shift together
@@ -23,7 +25,7 @@ VILOTA_CAM_MAP = {
     "DP180-": {
         "device_prefix": "DP180-",
         "num_cams": 3,
-        "cam_names": ["CamB", "CamC", "CamD"],        
+        "cam_names": ["CamB", "CamC", "CamD"],
     },
     "DP180IP": {
         "device_prefix": "DP180-",
@@ -35,73 +37,73 @@ VILOTA_CAM_MAP = {
         "device_prefix": "VKL-",
         "num_cams": 4,
         "cam_names": ["CamA", "CamB", "CamC", "CamD"],
-    }
+    },
 }
 
+
 def view_matrix_from_rotation_translation(
-            rotation: List,
-            translation: List,
-            offset: 'List[float]' = [0.0, 0.0, 0.0]
-        ) -> np.ndarray:
-        """
-        Constructs a 4×4 view matrix from rotation and translation, overriding zero-rotation for Cam 0 if needed,
-        and applying a global offset so all cameras shift together.
-        """
-        import numpy as np
+    rotation: List, translation: List, offset: "List[float]" = [0.0, 0.0, 0.0]
+) -> np.ndarray:
+    """
+    Constructs a 4×4 view matrix from rotation and translation, overriding zero-rotation for Cam 0 if needed,
+    and applying a global offset so all cameras shift together.
+    """
+    import numpy as np
 
-        # Convert to arrays
-    
-        R = np.array(rotation, dtype=float).reshape(3,3)   # shape (3,3)
-        t = np.array(translation, dtype=float).reshape(3,1)  # shape (3,1)
-        
-        # Override zero rotation to identity
-        if np.allclose(R, 0):
-            # This is likely Cam 0 with zero extrinsics; give it identity orientation
-            R = np.eye(3, dtype=float)
-            # Optionally: ensure t is zero so offset purely determines new center
-            t = np.zeros((3,1), dtype=float)
+    # Convert to arrays
 
-        # Apply global offset: shift camera center by `offset` in world space
-        offset_arr = np.array(offset, dtype=float).reshape(3,1)
-        # Assuming rotation/translation denote world-to-camera extrinsic:
-        #t = t - R @ offset_arr
-        
-        #t = t - offset_arr # TODO: remove this lol after seeing if it works in polyscope
+    R = np.array(rotation, dtype=float).reshape(3, 3)  # shape (3,3)
+    t = np.array(translation, dtype=float).reshape(3, 1)  # shape (3,1)
 
-      
-        # Build view matrix
-        upper = np.hstack([R, t])               # shape (3,4)
-        bottom = np.array([[0.0, 0.0, 0.0, 1.0]], dtype=upper.dtype)
-        view_matrix = np.vstack([upper, bottom])  # shape (4,4)
-        return view_matrix
+    # Override zero rotation to identity
+    if np.allclose(R, 0):
+        # This is likely Cam 0 with zero extrinsics; give it identity orientation
+        R = np.eye(3, dtype=float)
+        # Optionally: ensure t is zero so offset purely determines new center
+        t = np.zeros((3, 1), dtype=float)
+
+    # Apply global offset: shift camera center by `offset` in world space
+    offset_arr = np.array(offset, dtype=float).reshape(3, 1)
+    # Assuming rotation/translation denote world-to-camera extrinsic:
+    # t = t - R @ offset_arr
+
+    # t = t - offset_arr # TODO: remove this lol after seeing if it works in polyscope
+
+    # Build view matrix
+    upper = np.hstack([R, t])  # shape (3,4)
+    bottom = np.array([[0.0, 0.0, 0.0, 1.0]], dtype=upper.dtype)
+    view_matrix = np.vstack([upper, bottom])  # shape (4,4)
+    return view_matrix
+
 
 def build_extrinsic_mat_from_rotation_translation(
-            rotation: List,
-            translation: List,
-        ) -> np.ndarray:
-        """
-        Constructs a 4×4 extrinsic matrix from rotation and translation.
-        Overrides camD's 0 rotation to identity matrix
-        """
-        # Convert to arrays
-        R = np.array(rotation, dtype=float).reshape(3,3)   # shape (3,3)
-        t = np.array(translation, dtype=float).reshape(3,1)  # shape (3,1)
-        t = np.divide(t, 100.0) # to convert from cm to m
+    rotation: List,
+    translation: List,
+) -> np.ndarray:
+    """
+    Constructs a 4×4 extrinsic matrix from rotation and translation.
+    Overrides camD's 0 rotation to identity matrix
+    """
+    # Convert to arrays
+    R = np.array(rotation, dtype=float).reshape(3, 3)  # shape (3,3)
+    t = np.array(translation, dtype=float).reshape(3, 1)  # shape (3,1)
+    t = np.divide(t, 100.0)  # to convert from cm to m
 
-        # Override zero rotation to identity
-        if np.allclose(R, 0):
-            # This is likely Cam 0 with zero extrinsics; give it identity orientation
-            R = np.eye(3, dtype=float)
-            # Optionally: ensure t is zero so offset purely determines new center
-            t = np.zeros((3,1), dtype=float)
-      
-        # Build view matrix
-        upper = np.hstack([R, t])               # shape (3,4)
-        bottom = np.array([[0.0, 0.0, 0.0, 1.0]], dtype=upper.dtype)
-        extrinsic_matrix = np.vstack([upper, bottom])  # shape (4,4)
-        return extrinsic_matrix
+    # Override zero rotation to identity
+    if np.allclose(R, 0):
+        # This is likely Cam 0 with zero extrinsics; give it identity orientation
+        R = np.eye(3, dtype=float)
+        # Optionally: ensure t is zero so offset purely determines new center
+        t = np.zeros((3, 1), dtype=float)
 
-def six_dof_pose_to_view_mat (six_dof_pose: List[float]) -> np.ndarray:
+    # Build view matrix
+    upper = np.hstack([R, t])  # shape (3,4)
+    bottom = np.array([[0.0, 0.0, 0.0, 1.0]], dtype=upper.dtype)
+    extrinsic_matrix = np.vstack([upper, bottom])  # shape (4,4)
+    return extrinsic_matrix
+
+
+def six_dof_pose_to_view_mat(six_dof_pose: List[float]) -> np.ndarray:
     """
     Converts a 6-DOF pose (x, y, z, roll, pitch, yaw) into a 4x4 view matrix.
     Euler angles MUST be in degree format
@@ -110,7 +112,7 @@ def six_dof_pose_to_view_mat (six_dof_pose: List[float]) -> np.ndarray:
         six_dof_pose (List[float]): the 6-DOF pose (x, y, z, roll, pitch, yaw) of the origin camera
     """
     # We can construct the rotation matrix using scipy's from euler
-    rotation_matrix = R.from_euler('xyz', six_dof_pose[3:], degrees=True).as_matrix()
+    rotation_matrix = R.from_euler("xyz", six_dof_pose[3:], degrees=True).as_matrix()
     translation_vector = np.array(six_dof_pose[:3], dtype=float).reshape(3, 1)  # shape (3,1)
     # Stack them
     view_matrix = view_matrix_from_rotation_translation(rotation_matrix, translation_vector)
@@ -119,7 +121,7 @@ def six_dof_pose_to_view_mat (six_dof_pose: List[float]) -> np.ndarray:
 
 
 class NovelViewRenderer:
-    """ Manages the rendering of a simulated view from a Vilota device loaded from any Vilota calibration file"""
+    """Manages the rendering of a simulated view from a Vilota device loaded from any Vilota calibration file"""
 
     def __init__(self, renderer=None):
         self.renderer = renderer
@@ -138,20 +140,20 @@ class NovelViewRenderer:
         self.trajectory_folder = "./video_trajectories/"  # Default trajectory folder
         self.trajectory_parser = None
         self.trajectory_fullpath = "./video_trajectories/video_trajectory.csv"  # Default trajectory full path
-        self.world_to_camd =[]
+        self.world_to_camd = []
         self.world_to_cami = []
         self.i = 0  # Camera index to check
 
         self.center_view_matrix = None  # The center view matrix of the rig, used for scene center calculations
 
         self.trajectory = []
-    
+
     def set_filepath(self):
         """Sets the full path to the calibration file based on the current filename."""
         if not self.calibration_filename:
             raise ValueError("Calibration filename is not set.")
         self.calibration_fullpath = "./calibration_files/" + self.calibration_filename
-    
+
     def set_trajectory_filepath(self):
         """Sets the trajectory filename."""
         if not self.trajectory_filename:
@@ -160,58 +162,55 @@ class NovelViewRenderer:
 
     def is_loaded(self) -> bool:
         # You may cache or directly call underlying:
-        return getattr(self.v_device, 'isLoaded', lambda: False)()
-    
+        return getattr(self.v_device, "isLoaded", lambda: False)()
+
     def set_device_is_loaded(self, is_loaded: bool):
         """Sets the loaded state of the Vilota device."""
         if self.v_device is not None:
             self.v_device.loaded = is_loaded
         else:
             raise Error("Vilota device is not initialized.")
-    
+
     def ensure_loaded(method):
         """Decorator: raise Error if `self.is_loaded()` is False."""
+
         @functools.wraps(method)
         def wrapper(self, *args, **kwargs):
             if not self.is_loaded() or self.v_device is None:
                 raise Error(f"{method.__name__}(): vilota device not loaded.")
             return method(self, *args, **kwargs)
+
         return wrapper
-    
+
     def load_device(self, reload: bool = False):
         """Loads the Vilota device from the calibration file."""
         if reload or self.v_device is None:
             self.v_device = VilotaDevice.load_from_path(self.calibration_fullpath)
-    
+
     @ensure_loaded
     def get_camera_at_index(self, index: int) -> Camera:
         """Returns the camera at the specified index."""
         return self.v_device.get_camera_at_index(index)
-    
+
     @ensure_loaded
     def get_cam_name_at_index(self, index: int) -> str:
         """Returns the camera name at the specified index."""
         if index < 0 or index >= self.v_device.get_camera_count():
             raise IndexError(f"Camera index {index} out of range.")
         return self.v_device.get_cam_name(index)
-    
+
     @ensure_loaded
     def get_all_cameras(self) -> List[Camera]:
         """Returns all cameras in the device."""
         return self.v_device.get_all_cameras()
-    
+
     @ensure_loaded
     def get_camera_count(self) -> int:
         """Returns the number of cameras in the device."""
         return self.v_device.get_camera_count()
-    
+
     @ensure_loaded
-    def move_rig_to_pose(
-        self,
-        new_pose: List[float],
-        cam_index= None,
-        is_6dof= True
-    ):
+    def move_rig_to_pose(self, new_pose: List[float], cam_index=None, is_6dof=True):
         """
         Moves the origin camera to pose specified, and updates all cameras accordingly.
         If cam_index is not specified, pose is assumed to be that of origin camera (Cam D)
@@ -231,34 +230,27 @@ class NovelViewRenderer:
         if cam_index is None:
             cam_index = self.get_origin_camera_index()
 
-        #If is_6dof is not specified, pose is assumed to be a 4x4 view matrix
+        # If is_6dof is not specified, pose is assumed to be a 4x4 view matrix
         if is_6dof or len(new_pose) == 6:
             view_matrix = six_dof_pose_to_view_mat(new_pose)
-            self.__move_rig_to_pose(new_view_matrix = view_matrix, cam_index = cam_index, is_reshaped = True)
+            self.__move_rig_to_pose(new_view_matrix=view_matrix, cam_index=cam_index, is_reshaped=True)
 
-        else: self.__move_rig_to_pose(new_pose, cam_index)
+        else:
+            self.__move_rig_to_pose(new_pose, cam_index)
 
-    
     @ensure_loaded
-    def __move_rig_to_pose(
-        self,
-        new_view_matrix : List[float],
-        cam_index : int,
-        is_reshaped = False
-    ):
+    def __move_rig_to_pose(self, new_view_matrix: List[float], cam_index: int, is_reshaped=False):
         """
         Private method to move rig to new view matrix
         """
         # If it's not reshaped (given raw len 16 array), we reshape it
         if not is_reshaped:
             new_view_matrix = np.array(new_view_matrix, dtype=float).reshape(4, 4)
-        
+
         self.v_device.move_rig_to_view(new_view_matrix, cam_index)
 
     @ensure_loaded
-    def check_rig_layout(
-        self
-    ):
+    def check_rig_layout(self):
         """
         Checks the rig layout by comparing the extrinsics of camera i to the extrinsics of camera D.
         Args:
@@ -268,15 +260,14 @@ class NovelViewRenderer:
         """
         if len(self.world_to_camd) == 0:
             raise Error("world_to_camd is not set. Please set it before checking the rig layout.")
-        
+
         self.v_device.check_rig_layout(self.world_to_camd, self.world_to_cami, self.i)
-    
+
     @ensure_loaded
-    def get_origin_view_matrix(self, cam_index:int, new_pose:np.ndarray) -> np.ndarray:
+    def get_origin_view_matrix(self, cam_index: int, new_pose: np.ndarray) -> np.ndarray:
         return self.v_device.get_view_from_origin_cam(new_pose, cam_index)
 
-    
-    def convert_view_matrix_to_6dof_pose(self, new_pose = None) -> List[float]:
+    def convert_view_matrix_to_6dof_pose(self, new_pose=None) -> List[float]:
         """
         Converts the scene center to a 6-DOF pose.
         Takes this NVR's scene center view matrix and converts it into a 6DOF pose.
@@ -289,7 +280,8 @@ class NovelViewRenderer:
             raise Error("center_view_matrix is not set. Please set it before converting to 6DOF pose.")
         if new_pose is not None:
             world_to_body = new_pose
-        else: world_to_body = self.center_view_matrix
+        else:
+            world_to_body = self.center_view_matrix
         world_to_body = np.array(world_to_body, dtype=float).reshape(4, 4)
         body_to_world = np.linalg.inv(world_to_body)  # Invert the view matrix to get body to world
         r1 = body_to_world[0, :3]  # First row (x-axis)
@@ -298,15 +290,15 @@ class NovelViewRenderer:
         translation = body_to_world[:3, 3]  # Translation vector (tx, ty, tz)
         # Convert rotation matrix to Euler angles (roll, pitch, yaw)
         rotation = R.from_matrix(np.array([r1, r2, r3]))
-        roll_pitch_yaw = rotation.as_euler('xyz', degrees=True)  # Convert to Euler angles in degrees
+        roll_pitch_yaw = rotation.as_euler("xyz", degrees=True)  # Convert to Euler angles in degrees
         # Combine translation and rotation into a 6-DOF pose
         six_dof_pose = np.concatenate((translation, roll_pitch_yaw))
         return six_dof_pose.tolist()
-    
+
     @ensure_loaded
     def get_trajectory_poses(self) -> List[List[float]]:
         """Returns a list of 6-DOF poses from the trajectory parser."""
-        if not self.trajectory_parser: 
+        if not self.trajectory_parser:
             self.trajectory_parser = TrajectoryPathParser(self.trajectory_fullpath)
         if not self.trajectory_parser.poses:
             self.trajectory_parser.parse()
@@ -314,15 +306,15 @@ class NovelViewRenderer:
                 self.trajectory = self.trajectory_parser.poses
         self.trajectory = self.trajectory_parser.poses
         return self.trajectory_parser.poses
-    
+
     @ensure_loaded
-    def add_pose_to_trajectory(self, pose:np.ndarray, cam_index:int):
+    def add_pose_to_trajectory(self, pose: np.ndarray, cam_index: int):
         if cam_index != self.get_origin_camera_index():
             pose = self.v_device.get_view_from_origin_cam(pose, cam_index)
         pose = self.convert_view_matrix_to_6dof_pose(pose)
         self.trajectory = self.trajectory_parser.append_pose_to_file(pose)
         return self.trajectory
-    
+
     @ensure_loaded
     def create_new_trajectory(self):
         """
@@ -333,63 +325,61 @@ class NovelViewRenderer:
             self.trajectory_parser = TrajectoryPathParser(self.trajectory_fullpath)
         self.trajectory = self.trajectory_parser.create_new_trajectory_file(self.trajectory_fullpath)
         return self.trajectory
-    
-    
+
     @ensure_loaded
     def get_cam_distortions(self) -> List[float]:
         """Returns a list of distortion coefficients for all cameras."""
         return self.v_device.get_cam_distortions()
-    
+
     @ensure_loaded
     def get_origin_camera_pose(self) -> np.ndarray:
         """Returns the origin camera's pose as a 4x4 view matrix."""
         return self.v_device.get_origin_camera_pose()
-    
+
     @ensure_loaded
     def get_origin_camera_index(self) -> int:
         """Returns the index of the origin camera."""
         return self.v_device.get_origin_camera_index()
-    
+
     @ensure_loaded
     def get_camera_intrinsics_at_index(self, index: int) -> List[float]:
         camera = self.get_camera_at_index(index)
         return self.get_camera_intrinsics(camera)
-        
-    
+
     def get_camera_intrinsics(self, camera) -> Tuple[float, float, float, float]:
         fx = float(camera.intrinsics.focal_x)
         fy = float(camera.intrinsics.focal_y)
         cx = float(camera.intrinsics.x0)
         cy = float(camera.intrinsics.y0)
-        #if cx == 0.0 or cy == 0.0:
-            #raise ValueError(f"Camera {index} has invalid intrinsic parameters: cx={cx}, cy={cy}.")
+        # if cx == 0.0 or cy == 0.0:
+        # raise ValueError(f"Camera {index} has invalid intrinsic parameters: cx={cx}, cy={cy}.")
         return [fx, fy, cx, cy]
-    
+
     def get_string_representation(self) -> str:
         """Returns a string representation of the Vilota device."""
         if not self.is_loaded() or self.v_device is None:
             return "Vilota device not loaded."
         return self.v_device.get_string_rep()
-    
+
     def get_device_name_and_serial_no(self) -> str:
         """Returns the name and serial number of the Vilota device."""
         if not self.is_loaded() or self.v_device is None:
             return "Vilota device not loaded."
         return f"Device Name: {self.v_device.name},\nProduct name: {self.v_device.product_name}"
-    
+
 
 class VilotaDevice:
-    """ Represents a Vilota device with multiple cameras, loaded from a calibration file. """
+    """Represents a Vilota device with multiple cameras, loaded from a calibration file."""
 
     def __init__(self, calibration_file: str):
         self.calibration_file = calibration_file
-        self.name = os.path.basename(calibration_file).split('.')[0]
+        self.name = os.path.basename(calibration_file).split(".")[0]
         self.product_name = "Unknown"  # Placeholder for serial number, if available
         self.cameras = {}
         self.extrinsics = {}
         self.loaded = False
         self.loader = None
-        self.offset_from_origin =[1.0, 2.0, 3.0]  # Default offset from origin camera
+        self.offset_from_origin = [1.0, 2.0, 3.0]  # Default offset from origin camera
         # Scene scale [m per scene unit]. Extrinsic translations are metric
         # (cm/100 above); composing them with scene-space views must happen
         # in scene units when the scene is not 1 unit = 1 m. Set by the
@@ -397,8 +387,8 @@ class VilotaDevice:
         self.metres_per_unit = 1.0
 
     @classmethod
-    def load_from_path(cls, path: str) -> 'VilotaDevice':
-        """ Loads the Vilota device from a calibration file. """
+    def load_from_path(cls, path: str) -> "VilotaDevice":
+        """Loads the Vilota device from a calibration file."""
         device = cls(path)
         device.loader = Loader(path)
         try:
@@ -408,9 +398,10 @@ class VilotaDevice:
             device.cameras = cameras
             device.extrinsics = extrinsics
             device.origin_camera_pose = device.get_origin_camera_pose()
-            
+
         except Exception as e:
             import logging
+
             logging.error(f"Failed to load cameras: {e}")
             print(f"Failed to load cameras: {e}")
             device.loaded = False
@@ -427,12 +418,12 @@ class VilotaDevice:
 
     def get_camera_count(self) -> int:
         return len(self.cameras)
-    
+
     def get_cam_name(self, index: int) -> str:
         if self.name.startswith("DP180-"):
             return VILOTA_CAM_MAP["DP180-"]["cam_names"][index]
         elif self.name.startswith("DP180IP"):
-            
+
             return VILOTA_CAM_MAP["DP180IP"]["cam_names"][index]
         elif self.product_name.startswith("VK180"):
             return VILOTA_CAM_MAP["DP180IP"]["cam_names"][index]
@@ -440,26 +431,26 @@ class VilotaDevice:
             return VILOTA_CAM_MAP["VKL"]["cam_names"][index]
         else:
             raise ValueError(f"Unknown camera index {index} for device {self.name}.")
-    
+
     def get_cam_distortions(self) -> List[float]:
-        """ Returns a list of distortion coefficients for all cameras. """
+        """Returns a list of distortion coefficients for all cameras."""
         distortions = []
         for camera in self.cameras.values():
-            if hasattr(camera, 'distortion_coefficients'):
+            if hasattr(camera, "distortion_coefficients"):
                 dist = camera.distortion_coefficients
                 distortions.append(dist)
-                
+
             else:
                 distortions.append(None)
 
         return distortions
-    
+
     def check_rig_layout(self, world_to_camd, world_to_cami, i):
-    # world_to_camd : Get the world to cam of cam D
-    # world_to_cama : get the world to cam of cam A
+        # world_to_camd : Get the world to cam of cam D
+        # world_to_cama : get the world to cam of cam A
         cam_i_to_camd = np.array(world_to_camd) @ np.linalg.inv(np.array(world_to_cami))
         # create a new file to store the cam_i_to_camd and compare it with cam i's extrinsics
-        #first create and open a new file called check_extrinsics.txt
+        # first create and open a new file called check_extrinsics.txt
         with open("check_extrinsics.txt", "a") as f:
             f.write(f"Camera {i} to Cam D extrinsics:\n")
             f.write(f"{cam_i_to_camd}\n")
@@ -479,31 +470,30 @@ class VilotaDevice:
             view_cam_index (int): Indicates which camera the view matrix is from
         """
         # Check if new_view_matrix is from origin, if not get the origin view matrix relative to this
-        
-        og_index = self.get_origin_camera_index() 
+
+        og_index = self.get_origin_camera_index()
         is_view_from_origin = view_cam_index == og_index
         if not is_view_from_origin:
             new_view_matrix = self.get_view_from_origin_cam(new_view_matrix, view_cam_index)
-        
+
         # Update each camera to new calculated view
         for index, camera in self.cameras.items():
             F = np.diag([1, -1, -1, 1])
-            world_to_cam0 = F@ new_view_matrix @F
+            world_to_cam0 = F @ new_view_matrix @ F
             cam0_to_world = np.linalg.inv(world_to_cam0)
             cam_i_to_cam0 = np.array(self.extrinsics[index], dtype=float).copy()
-            cam_i_to_cam0[:3, 3] /= self.metres_per_unit   # metric -> scene units
+            cam_i_to_cam0[:3, 3] /= self.metres_per_unit  # metric -> scene units
             cami_to_world = cam0_to_world @ cam_i_to_cam0
-            
+
             world_to_cami = np.linalg.inv(cami_to_world)  # Invert to get the view matrix
             new_view_mat = F @ world_to_cami @ F
-            camera.update(torch.tensor(new_view_mat, dtype=torch.float64)) 
-        
+            camera.update(torch.tensor(new_view_mat, dtype=torch.float64))
+
         # Update the origin camera pose
         # self.cameras[og_index].update(torch.tensor(new_view_matrix, dtype=torch.float64))  # Update the origin camera's view matrix
         # self.origin_camera_pose = new_view_matrix
-    
 
-    def get_view_from_origin_cam(self, world_to_cami: np.ndarray, cam_index : int) -> np.ndarray:
+    def get_view_from_origin_cam(self, world_to_cami: np.ndarray, cam_index: int) -> np.ndarray:
         """
         Helper function to calculate view matrix of origin camera given the
         view matrix of another camera
@@ -520,17 +510,17 @@ class VilotaDevice:
         # returned origin view is in the same axes as the input.
         F = np.diag([1.0, -1.0, -1.0, 1.0])
         cami_to_cam0 = np.array(self.extrinsics[cam_index], dtype=float).copy()
-        cami_to_cam0[:3, 3] /= self.metres_per_unit   # metric -> scene units
+        cami_to_cam0[:3, 3] /= self.metres_per_unit  # metric -> scene units
         world_to_camd = F @ (cami_to_cam0 @ (F @ world_to_cami @ F)) @ F
 
         return world_to_camd
 
     def get_origin_camera_pose(self):
         return self.loader.get_origin_camera_info()[1]
-    
+
     def get_origin_camera_index(self):
         return self.loader.get_origin_camera_info()[0]
-    
+
     def get_string_rep(self):
         strng = "Vilota Device:\n"
         if self.cameras != {}:
@@ -541,33 +531,34 @@ class VilotaDevice:
                     strng += " (Origin Camera)\n"
         else:
             strng += "No cameras loaded.\n"
-        
+
         return strng
-    
+
 
 class Loader:
-    """ Loader for Vilota calibration files. """
+    """Loader for Vilota calibration files."""
+
     def __init__(self, calibration_file: str):
         self.calibration_file = calibration_file
-    
+
     def load_camera_info(self) -> Tuple[int, dict]:
         """
         Loads a tuple of number of cameras
         and the camera data list from the json file."""
         if not os.path.exists(self.calibration_file):
             raise FileNotFoundError(f"Calibration file {self.calibration_file} does not exist.")
-        
-        with open(self.calibration_file, 'r') as file:
+
+        with open(self.calibration_file, "r") as file:
             data = json.load(file)
-        
-        camera_data = data.get('cameraData', [])
+
+        camera_data = data.get("cameraData", [])
         num_cameras = len(camera_data)
-        
+
         if num_cameras == 0:
             raise ValueError("No camera data found in the calibration file.")
-        
+
         return num_cameras, camera_data
-    
+
     def load_device_info(self) -> Tuple[str, str]:
         """
         Loads the device name and serial number from the calibration file.
@@ -576,20 +567,16 @@ class Loader:
         """
         if not os.path.exists(self.calibration_file):
             raise FileNotFoundError(f"Calibration file {self.calibration_file} does not exist.")
-        
-        with open(self.calibration_file, 'r') as file:
+
+        with open(self.calibration_file, "r") as file:
             data = json.load(file)
-        
-        device_name = data.get('deviceName', 'Unknown')
-        product_name = data.get('productName', 'Unknown')
-        
+
+        device_name = data.get("deviceName", "Unknown")
+        product_name = data.get("productName", "Unknown")
+
         return device_name, product_name
 
-    def parse_cali_json_to_camera_params(
-            self,
-            data: List,
-            index: int = 0          
-        ) -> Tuple[int, dict]:
+    def parse_cali_json_to_camera_params(self, data: List, index: int = 0) -> Tuple[int, dict]:
         """
         Parses a .json calibration file and returns the camera parameters.
 
@@ -601,36 +588,33 @@ class Loader:
             dict: A dictionary containing the camera parameters.
         """
         cam_data = data
-        
+
         cam_rig_index = cam_data[index][0]
         camera_data = cam_data[index][1]
 
-        translation = camera_data.get('extrinsics', {}).get('translation', [])
+        translation = camera_data.get("extrinsics", {}).get("translation", [])
         trans_vector = list(translation.values())
-        cam_type = camera_data.get('cameraType', 9)
+        cam_type = camera_data.get("cameraType", 9)
         if cam_type != 0:
             has_distortion = False
         else:
             has_distortion = True
-        
+
         camera_params = {
-            'cameraType': camera_data.get('cameraType', 'unknown'),
-            'distortionCoeff': camera_data.get('distortionCoeff', []),
-            'ext_rotation' : camera_data.get('extrinsics', {}).get('rotationMatrix', []),
-            'ext_translation' : trans_vector,
-            'intrinsics': camera_data.get('intrinsicMatrix', {}),
-            'width': camera_data.get('width', 1920),
-            'height': camera_data.get('height', 1200),
-            'hasDistortion': has_distortion
+            "cameraType": camera_data.get("cameraType", "unknown"),
+            "distortionCoeff": camera_data.get("distortionCoeff", []),
+            "ext_rotation": camera_data.get("extrinsics", {}).get("rotationMatrix", []),
+            "ext_translation": trans_vector,
+            "intrinsics": camera_data.get("intrinsicMatrix", {}),
+            "width": camera_data.get("width", 1920),
+            "height": camera_data.get("height", 1200),
+            "hasDistortion": has_distortion,
         }
 
         return cam_rig_index, camera_params
 
     def cam_params_to_distortion_camera(
-            self,
-            cam_rig_index: int,
-            camera_params: dict, 
-            device: Union[torch.device, str] = 'cpu'
+        self, cam_rig_index: int, camera_params: dict, device: Union[torch.device, str] = "cpu"
     ) -> Tuple[np.ndarray, Camera]:
         """
         Converts loaded camera parameters to a Distortion Camera object.
@@ -642,28 +626,27 @@ class Loader:
             Camera: A Kaolin Camera object initialized with the provided parameters.
         """
         # Extract intrinsic params
-        intrinsic_matrix = camera_params['intrinsics']
+        intrinsic_matrix = camera_params["intrinsics"]
         f_x = intrinsic_matrix[0][0]
         f_y = intrinsic_matrix[1][1]
         c_x = intrinsic_matrix[0][2]
         c_y = intrinsic_matrix[1][2]
 
         # Extract extrinsic params
-        rotation_matrix = camera_params['ext_rotation']
-        translation_vector = camera_params['ext_translation']
+        rotation_matrix = camera_params["ext_rotation"]
+        translation_vector = camera_params["ext_translation"]
         print(f"Rot {cam_rig_index}:{rotation_matrix}")
         print(f"Trans {cam_rig_index}:{translation_vector}")
-        
 
         if rotation_matrix is None or len(rotation_matrix) == 0:
-            rotation_matrix = [[0.0,0.0,0.0],[0.0,0.0,0.0],[0.0,0.0,0.0]]
+            rotation_matrix = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
             self.origin_camera_pose = build_extrinsic_mat_from_rotation_translation(rotation_matrix, translation_vector)
             self.origin_camera = cam_rig_index
 
         elif rotation_matrix[0][0] == 0.0 and rotation_matrix[1][1] == 0.0 and rotation_matrix[2][2] == 0.0:
             self.origin_camera_pose = build_extrinsic_mat_from_rotation_translation(rotation_matrix, translation_vector)
             self.origin_camera = cam_rig_index
-         
+
         extrinsic_matrix = build_extrinsic_mat_from_rotation_translation(rotation_matrix, translation_vector)
         print(f"Extrinsic Matrix {cam_rig_index}:\n{extrinsic_matrix}")
 
@@ -677,22 +660,22 @@ class Loader:
 
         # Convert to Distortion Camera object
         distortion_camera = Camera.from_args(
-            view_matrix = torch.tensor(initial_view_matrix, dtype=torch.float64, device=device),
-            focal_x = f_x,
-            focal_y = f_y,
-            x0 = c_x,
-            y0 = c_y,
-            width = camera_params['width'],
-            height = camera_params['height'],
-            distortion_coefficients = camera_params['distortionCoeff'],
+            view_matrix=torch.tensor(initial_view_matrix, dtype=torch.float64, device=device),
+            focal_x=f_x,
+            focal_y=f_y,
+            x0=c_x,
+            y0=c_y,
+            width=camera_params["width"],
+            height=camera_params["height"],
+            distortion_coefficients=camera_params["distortionCoeff"],
             intrinsic_params=[f_x, f_y, c_x, c_y],
             dtype=torch.float64,
-            device = device
+            device=device,
         )
         distortion_camera.set_intrinsic_params([f_x, f_y, c_x, c_y])
 
         return extrinsic_matrix, distortion_camera
-    
+
     def load_all_cameras(self) -> Tuple[dict, dict]:
         """
         Loads all cameras from the calibration file and returns a list of Distortion Camera objects.
@@ -701,7 +684,7 @@ class Loader:
         Tuple:
             extrinsics (dict): A dictionary where keys are camera rig indices and values are 4x4 extrinsic matrices.
             cameras (dict): A dictionary where keys are camera rig indices and
-            
+
         """
         num_cameras, camera_data = self.load_camera_info()
         cameras = {}
@@ -711,8 +694,8 @@ class Loader:
             extrinsic_mat, distortion_camera = self.cam_params_to_distortion_camera(cam_rig_index, cam_params)
 
             cameras[cam_rig_index] = distortion_camera
-            extrinsics[cam_rig_index] = extrinsic_mat # 
-            
+            extrinsics[cam_rig_index] = extrinsic_mat  #
+
         # Sort cameras and extrinsics by camera rig index
         extrinsics = dict(sorted(extrinsics.items(), key=lambda x: x[0]))
         cameras = dict(sorted(cameras.items(), key=lambda x: x[0]))
@@ -722,35 +705,35 @@ class Loader:
     def get_origin_camera_info(self) -> Tuple[int, np.ndarray]:
         """
         Returns the origin camera's index and its pose as a 4x4 view matrix.
-        
+
         Returns:
             Tuple[int, np.ndarray]: The index of the origin camera and its view matrix.
         """
         return self.origin_camera, self.origin_camera_pose
-    
+
 
 class TrajectoryPathParser:
-    """ Parses a trajectory path file and returns a list of 6-DOF poses. """
-    
+    """Parses a trajectory path file and returns a list of 6-DOF poses."""
+
     def __init__(self, path: str):
         self.trajectory_file = path if path else "./video_trajectories/test_1.csv"
         self.poses = []
-    
+
     def parse(self) -> List[List[float]]:
-        data =[]
+        data = []
         if not os.path.exists(self.trajectory_file):
             raise FileNotFoundError(f"Trajectory file {self.trajectory_file} does not exist.")
-        with open(self.trajectory_file, newline='') as f:
+        with open(self.trajectory_file, newline="") as f:
             reader = csv.reader(f)
             data = list(reader)
-        #save the poses as floats
+        # save the poses as floats
         data = data[1:]  # Skip the header row
         data = [[float(x) for x in row] for row in data if len(row) == 6]  # Ensure each row has exactly 6 elements
         if data is None:
             raise Error("Trajectory CSV has no entries.")
         self.poses = data
         return data
-    
+
     def create_new_trajectory_file(self, filepath: str = None):
         """
         Creates a new trajectory file with the specified filepath.
@@ -758,48 +741,50 @@ class TrajectoryPathParser:
         """
         if filepath:
             self.trajectory_file = filepath
-        if not self.trajectory_file.endswith('.csv'):
-            self.trajectory_file += '.csv'
-        
+        if not self.trajectory_file.endswith(".csv"):
+            self.trajectory_file += ".csv"
+
         # Create the file and write the header
-        with open(self.trajectory_file, 'w', newline='') as f:
+        with open(self.trajectory_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['x', 'y', 'z', 'roll', 'pitch', 'yaw'])
+            writer.writerow(["x", "y", "z", "roll", "pitch", "yaw"])
 
         poses = self.parse()
         return poses
-    
+
     def append_pose_to_file(self, pose):
         """
         Appends a new pose to the trajectory file.
-        """  
-        with open(self.trajectory_file, 'a', newline='') as f:
+        """
+        with open(self.trajectory_file, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(pose)  # Write the pose as a new row
         poses = self.parse()
         return poses
 
+
 ############# TEST FUNCTIONS ######################
 
-def test_novel_view_renderer_load(path:str = "vkl.json"):
+
+def test_novel_view_renderer_load(path: str = "vkl.json"):
     """
     Test function to demonstrate the usage of NovelViewRenderer.
     """
     renderer = None  # Replace with actual renderer instance
     nvr = NovelViewRenderer(renderer)
-    #nvr.calibration_folder = "~/3dgrut/calibration/"
+    # nvr.calibration_folder = "~/3dgrut/calibration/"
     # Set calibration path
     nvr.calibration_filename = path
     nvr.set_filepath()
     nvr.calibration_fullpath = "../../calibration_files/" + nvr.calibration_filename
     print("Loading calibration file:", nvr.calibration_fullpath)
     # Load cameras from calibration file
-    
+
     nvr.load_device()
     print(nvr.get_string_representation())
-    
 
-    #print(f"Params: {nvr.camera_distortion_params}")
+    # print(f"Params: {nvr.camera_distortion_params}")
+
 
 devices = ["vkl.json", "dp180_1.json", "dp180_2.json", "vk180.json"]
 
@@ -807,34 +792,34 @@ devices = ["vkl.json", "dp180_1.json", "dp180_2.json", "vk180.json"]
 #     print(f"Testing device: {device}")
 #     test_novel_view_renderer_load(device)
 
-def test_novel_view_renderer_move_rig(path:str = "vkl.json"):
+
+def test_novel_view_renderer_move_rig(path: str = "vkl.json"):
     """
     Test function to demonstrate the usage of NovelViewRenderer.
     """
     renderer = None  # Replace with actual renderer instance
     nvr = NovelViewRenderer(renderer)
-    #nvr.calibration_folder = "~/3dgrut/calibration/"
+    # nvr.calibration_folder = "~/3dgrut/calibration/"
     # Set calibration path
     nvr.calibration_filename = path
     nvr.set_filepath()
     print("Loading calibration file:", nvr.calibration_fullpath)
     # Load cameras from calibration file
-    
+
     nvr.load_device()
     print(nvr.get_string_representation())
-    
-    nvr.move_rig_to(
-        new_pose = [0.0, 0.0, 0.0, 90.0, 180.0, 0.0]  # Example pose: [tx, ty, tz, roll, pitch, yaw]
-    )
+
+    nvr.move_rig_to(new_pose=[0.0, 0.0, 0.0, 90.0, 180.0, 0.0])  # Example pose: [tx, ty, tz, roll, pitch, yaw]
     print(nvr.get_string_representation())
+
 
 def main():
     test_novel_view_renderer_load("vk180.json")
 
+
 if __name__ == "__main__":
     main()
-    #test_novel_view_renderer_move_rig()
-    #test_novel_view_renderer_load("dp180_1.json")
-    #test_novel_view_renderer_load("dp180_2.json")
-    #test_novel_view_renderer_load("vk180.json")
-
+    # test_novel_view_renderer_move_rig()
+    # test_novel_view_renderer_load("dp180_1.json")
+    # test_novel_view_renderer_load("dp180_2.json")
+    # test_novel_view_renderer_load("vk180.json")

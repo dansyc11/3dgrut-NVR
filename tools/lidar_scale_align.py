@@ -27,6 +27,7 @@ and main_campus/; the result is written next to the inputs):
     python tools/lidar_scale_align.py meetingroom
     python tools/lidar_scale_align.py campus
 """
+
 import argparse
 import datetime
 import json
@@ -47,23 +48,23 @@ PRESETS = {
         images_bin="meetingroom/model/images.bin",
         out="meetingroom/lidar_alignment.json",
         scale_range=(0.30, 0.80),
-        path_crop=6.0,          # splat units around the camera path
-        band=(0.10, 1.95),      # metres above ground used for registration
+        path_crop=6.0,  # splat units around the camera path
+        band=(0.10, 1.95),  # metres above ground used for registration
         facade_band=(0.45, 1.90),  # metres above ground used for wall lines
-        cell=0.12,              # occupancy cell, metres
-        coarse_cell=0.12,       # occupancy cell for the global sweep
-        line_thresh=0.06,       # line RANSAC threshold, metres (lidar side)
-        line_thresh_splat=0.10, # line RANSAC threshold, splat units
+        cell=0.12,  # occupancy cell, metres
+        coarse_cell=0.12,  # occupancy cell for the global sweep
+        line_thresh=0.06,  # line RANSAC threshold, metres (lidar side)
+        line_thresh_splat=0.10,  # line RANSAC threshold, splat units
         icp_trims=(1.0, 0.6, 0.4, 0.3, 0.22, 0.16),
-        nn_eps=0.15,            # rescore inlier radius, metres
-        eps_tight=0.10,         # basin adjudication radius, metres
-        struct_lo=0.30,         # metres above ground: "structure" (no floor)
-        z_min_u=None,           # optional splat structure floor, UNITS
+        nn_eps=0.15,  # rescore inlier radius, metres
+        eps_tight=0.10,  # basin adjudication radius, metres
+        struct_lo=0.30,  # metres above ground: "structure" (no floor)
+        z_min_u=None,  # optional splat structure floor, UNITS
         sfm_points="meetingroom/model/points3D.bin",
         register_with="splat",
         splat_peak_frac=0.25,
         off_tol=0.30,
-        expected_scale=0.50,    # known-answer control
+        expected_scale=0.50,  # known-answer control
     ),
     "campus": dict(
         splat="main_campus/splat_points.npy",
@@ -103,10 +104,11 @@ PRESETS = {
 }
 
 A_MINUS_Y = np.array([[1.0, 0, 0], [0, 0, 1], [0, -1, 0]])  # up = -Y -> +Z
-A_PLUS_Y = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])   # up = +Y -> +Z
+A_PLUS_Y = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])  # up = +Y -> +Z
 
 
 # ---------------------------------------------------------------- data loading
+
 
 def read_cam_centers(path):
     """COLMAP images.bin -> Nx3 camera centres C = -R^T t."""
@@ -123,11 +125,13 @@ def read_cam_centers(path):
             npts = struct.unpack("<Q", f.read(8))[0]
             f.seek(24 * npts, 1)
             w, x, y, z = q
-            R = np.array([
-                [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-                [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-                [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-            ])
+            R = np.array(
+                [
+                    [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                    [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                    [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+                ]
+            )
             centers.append(-R.T @ t)
     return np.stack(centers)
 
@@ -136,9 +140,9 @@ def load_points(path):
     if path.endswith(".npy"):
         return np.load(path).astype(np.float64)
     from plyfile import PlyData
+
     v = PlyData.read(path).elements[0]
-    return np.stack([np.asarray(v["x"]), np.asarray(v["y"]),
-                     np.asarray(v["z"])], axis=1).astype(np.float64)
+    return np.stack([np.asarray(v["x"]), np.asarray(v["y"]), np.asarray(v["z"])], axis=1).astype(np.float64)
 
 
 def read_points3d_bin(path, max_err=2.0, min_track=3):
@@ -160,6 +164,7 @@ def read_points3d_bin(path, max_err=2.0, min_track=3):
 
 
 # ------------------------------------------------------------ plane primitives
+
 
 def plane_ransac(pts, thresh, iters=800, normal_prior=None, max_tilt_deg=15.0):
     """RANSAC plane n.p = d; optional cone constraint on the normal."""
@@ -219,22 +224,31 @@ def fit_floor(pts, cam_med_z, thresh=None):
     z0, binw = lowest_floor_peak(below[:, 2])
     thresh = 3.0 * binw if thresh is None else thresh
     seed = pts[np.abs(pts[:, 2] - z0) < 3.5 * thresh]
-    n, d, nin = plane_ransac(seed, thresh=thresh,
-                             normal_prior=np.array([0, 0, 1.0]), max_tilt_deg=15)
+    n, d, nin = plane_ransac(seed, thresh=thresh, normal_prior=np.array([0, 0, 1.0]), max_tilt_deg=15)
     return n, d, nin, thresh
 
 
 # --------------------------------------------------------------- registration
 
+
 def occupancy(xy, x0, y0, nx, ny, cell):
-    H, _, _ = np.histogram2d(xy[:, 0], xy[:, 1], bins=[nx, ny],
-                             range=[[x0, x0 + nx * cell], [y0, y0 + ny * cell]])
+    H, _, _ = np.histogram2d(xy[:, 0], xy[:, 1], bins=[nx, ny], range=[[x0, x0 + nx * cell], [y0, y0 + ny * cell]])
     return np.sqrt(H)
 
 
-def coarse_search(spl, lidar_band, scale_range, cell, yaw_step=2.0,
-                  scale_step=1.035, band=(0.1, 2.0), n_keep=60, sp_max=30000,
-                  yaw_range=(0.0, 360.0), z_min_u=None):
+def coarse_search(
+    spl,
+    lidar_band,
+    scale_range,
+    cell,
+    yaw_step=2.0,
+    scale_step=1.035,
+    band=(0.1, 2.0),
+    n_keep=60,
+    sp_max=30000,
+    yaw_range=(0.0, 360.0),
+    z_min_u=None,
+):
     """(yaw, s) grid; per-candidate translation by FFT xcorr. Returns candidates."""
     x0 = lidar_band[:, 0].min() - 2 * cell
     y0 = lidar_band[:, 1].min() - 2 * cell
@@ -271,13 +285,11 @@ def coarse_search(spl, lidar_band, scale_range, cell, yaw_step=2.0,
                 Fl_cache[(NX, NY)] = np.fft.rfft2(Hl, s=(NX, NY))
             Fl = Fl_cache[(NX, NY)]
             Hs = occupancy(xy, sx0, sy0, nsx, nsy, cell)
-            cc = np.fft.irfft2(Fl * np.conj(np.fft.rfft2(Hs, s=(NX, NY))),
-                               s=(NX, NY))
+            cc = np.fft.irfft2(Fl * np.conj(np.fft.rfft2(Hs, s=(NX, NY))), s=(NX, NY))
             k = np.unravel_index(np.argmax(cc), cc.shape)
             mx = k[0] if k[0] < NX // 2 else k[0] - NX
             my = k[1] if k[1] < NY // 2 else k[1] - NY
-            cands.append((float(cc[k]), float(s), float(yaw),
-                          (x0 - sx0) + mx * cell, (y0 - sy0) + my * cell))
+            cands.append((float(cc[k]), float(s), float(yaw), (x0 - sx0) + mx * cell, (y0 - sy0) + my * cell))
     cands.sort(key=lambda t: -t[0])
     return cands[:n_keep]
 
@@ -310,16 +322,14 @@ def transform_pts(P, s, yaw_deg, t):
     return Q
 
 
-def rescore(cands, spl, lidar_band, ltree, band, eps, sp_max=12000, li_max=20000,
-            z_min_u=None):
+def rescore(cands, spl, lidar_band, ltree, band, eps, sp_max=12000, li_max=20000, z_min_u=None):
     """Symmetric trimmed-NN score: fwd (splat->lidar) * rev (lidar->splat).
 
     rev is measured against a FIXED sample of the WHOLE lidar band, never a
     region cropped to the candidate: a collapsed-scale candidate then explains
     almost none of the lidar and scores near zero, while restricting to the
     candidate's own bbox would let it 'fully explain' a tiny patch."""
-    Lfix = lidar_band if len(lidar_band) <= li_max else \
-        lidar_band[rng.choice(len(lidar_band), li_max, replace=False)]
+    Lfix = lidar_band if len(lidar_band) <= li_max else lidar_band[rng.choice(len(lidar_band), li_max, replace=False)]
     out = []
     for _, s, yaw, tx, ty in cands:
         P = spl[splat_band_mask(spl[:, 2], s, band, z_min_u)]
@@ -363,18 +373,20 @@ def icp_refine(spl_slab, ltree, s, yaw, t, trims, fix_scale=False):
         if np.linalg.det(U @ Vt) < 0:
             S[1, 1] = -1
         R2 = U @ S @ Vt
-        var_p = (pc ** 2).sum() / len(p)
+        var_p = (pc**2).sum() / len(p)
         s_new = s if fix_scale else float(np.trace(np.diag(D) @ S) / var_p)
         t2 = mx - s_new * (R2 @ mp)
         yaw_new = float(np.degrees(np.arctan2(R2[1, 0], R2[0, 0])))
         tz = float(np.median(X[:, 2] - s_new * P[:, 2]))
         s, yaw, t = s_new, yaw_new, np.array([t2[0], t2[1], tz])
-        stats = dict(trim_m=float(trim), matched=int(keep.sum()), of=int(len(P0)),
-                     rms_m=float(np.sqrt((d[keep] ** 2).mean())))
+        stats = dict(
+            trim_m=float(trim), matched=int(keep.sum()), of=int(len(P0)), rms_m=float(np.sqrt((d[keep] ** 2).mean()))
+        )
     return s, yaw % 360.0, t, stats
 
 
 # -------------------------------------------------------------- wall planes
+
 
 def wall_cells(pts, cell, zmin, zmax, min_cover=0.5, min_pts=4, nz=8):
     """Centres of 2D cells whose z occupancy covers >= min_cover of [zmin,zmax]."""
@@ -432,8 +444,9 @@ def seq_line_ransac(xy, thresh, n_lines=8, iters=1500, min_in=20):
         direc = np.array([nv[1], -nv[0]])
         tp = (P - P.mean(0)) @ direc
         seg = float(np.percentile(tp, 98) - np.percentile(tp, 2))
-        out.append(dict(theta=float(np.degrees(np.arctan2(nv[1], nv[0])) % 180.0),
-                        n=nv.copy(), d=d, nin=int(m.sum()), seg=seg))
+        out.append(
+            dict(theta=float(np.degrees(np.arctan2(nv[1], nv[0])) % 180.0), n=nv.copy(), d=d, nin=int(m.sum()), seg=seg)
+        )
         pts = pts[~m]
     return out
 
@@ -459,8 +472,7 @@ def refine_angle(xy, th0, half=2.5, step=0.1, binw=0.05):
     return float(best[1])
 
 
-def profile_peaks(pts, nvec, binw, zmin, zmax, min_sep, min_frac=0.10,
-                  min_count=30, min_cover=0.40, nz=8, max_peaks=6):
+def profile_peaks(pts, nvec, binw, zmin, zmax, min_sep, min_frac=0.10, min_count=30, min_cover=0.40, nz=8, max_peaks=6):
     """Vertical-plane candidates along one family normal.
 
     Peaks of the 1D offset histogram of band points, each required to have
@@ -486,14 +498,14 @@ def profile_peaks(pts, nvec, binw, zmin, zmax, min_sep, min_frac=0.10,
         zz = z[m]
         octs = np.floor((zz - zmin) / (zmax - zmin) * nz).clip(0, nz - 1).astype(int)
         cover = len(np.unique(octs)) / nz
-        peaks.append(dict(offset=off, count=int(m.sum()), cover=float(cover),
-                          is_vertical=bool(cover >= min_cover)))
+        peaks.append(dict(offset=off, count=int(m.sum()), cover=float(cover), is_vertical=bool(cover >= min_cover)))
         if len(peaks) >= max_peaks:
             break
     return sorted(peaks, key=lambda p: p["offset"])
 
 
 # ------------------------------------------------------------------- pipeline
+
 
 def T4(R=None, t=None, s=1.0):
     M = np.eye(4)
@@ -512,8 +524,10 @@ def run(name, cfg, args):
     cams = read_cam_centers(cfg["images_bin"])
     reg_src = args.register_with or cfg["register_with"]
     reg_raw = read_points3d_bin(cfg["sfm_points"]) if reg_src == "sfm" else sp_raw
-    print(f"splat {len(sp_raw)} pts, lidar {len(li_raw)} pts, cams {len(cams)}; "
-          f"registering with {reg_src} cloud ({len(reg_raw)} pts)")
+    print(
+        f"splat {len(sp_raw)} pts, lidar {len(li_raw)} pts, cams {len(cams)}; "
+        f"registering with {reg_src} cloud ({len(reg_raw)} pts)"
+    )
 
     # --- 1. up-axis detection. Two candidates (+-Y up); for each, fit the
     # lowest substantial horizontal plane below the cameras with a COMMON
@@ -535,9 +549,7 @@ def run(name, cfg, args):
     for tag, ud in up_data.items():
         seed = ud["near"][np.abs(ud["near"][:, 2] - ud["z0"]) < 3.5 * thr]
         try:
-            n, dpl, nin = plane_ransac(seed, thresh=thr,
-                                       normal_prior=np.array([0, 0, 1.0]),
-                                       max_tilt_deg=15)
+            n, dpl, nin = plane_ransac(seed, thresh=thr, normal_prior=np.array([0, 0, 1.0]), max_tilt_deg=15)
         except RuntimeError:
             up_scores[tag] = dict(inliers=0, below=0, score=0.0)
             continue
@@ -545,9 +557,11 @@ def run(name, cfg, args):
         nin_all = int((np.abs(resid) < thr).sum())
         n_below = int((resid < -3 * thr).sum())
         up_scores[tag] = dict(
-            inliers=nin_all, below_plane=n_below,
+            inliers=nin_all,
+            below_plane=n_below,
             score=float(nin_all / (1.0 + 5.0 * n_below)),
-            cam_height=float(np.median(ud["qc"][:, 2]) - dpl))
+            cam_height=float(np.median(ud["qc"][:, 2]) - dpl),
+        )
     chosen = args.up_axis
     if chosen == "auto":
         chosen = max(up_scores, key=lambda k: up_scores[k]["score"])
@@ -568,15 +582,16 @@ def run(name, cfg, args):
     spl = spn @ R_s.T
     spl[:, 2] -= gd_s
     cam_h = float(np.median(cams_u @ R_s.T, axis=0)[2] - gd_s)
-    print(f"splat floor: n={gn_s.round(4)} d={gd_s:.3f} inl={gin_s} "
-          f"(thr {gthr_s:.3f}u); cameras {cam_h:.2f}u above floor")
+    print(
+        f"splat floor: n={gn_s.round(4)} d={gd_s:.3f} inl={gin_s} "
+        f"(thr {gthr_s:.3f}u); cameras {cam_h:.2f}u above floor"
+    )
 
     # --- 3. level lidar on its (global) ground
     low = li_raw[li_raw[:, 2] < np.percentile(li_raw[:, 2], 25)]
     if len(low) > 60000:
         low = low[rng.choice(len(low), 60000, replace=False)]
-    gn_l, gd_l, gin_l, _ = fit_floor(low, cam_med_z=low[:, 2].max() + 1.0,
-                                     thresh=cfg["line_thresh"])
+    gn_l, gd_l, gin_l, _ = fit_floor(low, cam_med_z=low[:, 2].max() + 1.0, thresh=cfg["line_thresh"])
     R_l0 = leveling(gn_l, gd_l)
     lil = li_raw @ R_l0.T
     lil[:, 2] -= gd_l
@@ -588,17 +603,18 @@ def run(name, cfg, args):
     lb = voxel_down(lb, cfg["cell"])
     lsub = lb if len(lb) <= 150000 else lb[rng.choice(len(lb), 150000, replace=False)]
     ltree = cKDTree(lsub)
-    print(f"coarse search: scale {cfg['scale_range']}, lidar band pts "
-          f"{len(lb)} (voxel {cfg['cell']} m)")
-    cands = coarse_search(spl, lb, cfg["scale_range"], cfg["coarse_cell"],
-                          band=band, z_min_u=cfg["z_min_u"], n_keep=150)
-    scored = rescore(cands, spl, lb, ltree, band, cfg["nn_eps"],
-                     z_min_u=cfg["z_min_u"])
+    print(f"coarse search: scale {cfg['scale_range']}, lidar band pts " f"{len(lb)} (voxel {cfg['cell']} m)")
+    cands = coarse_search(
+        spl, lb, cfg["scale_range"], cfg["coarse_cell"], band=band, z_min_u=cfg["z_min_u"], n_keep=150
+    )
+    scored = rescore(cands, spl, lb, ltree, band, cfg["nn_eps"], z_min_u=cfg["z_min_u"])
     best = scored[0]
     print("top coarse candidates (score=fwd*rev):")
     for r in scored[:5]:
-        print(f"  s={r['s']:.3f} yaw={r['yaw']:6.1f} t=({r['tx']:+7.2f},{r['ty']:+7.2f}) "
-              f"fwd={r['fwd']:.3f} rev={r['rev']:.3f} score={r['score']:.4f}")
+        print(
+            f"  s={r['s']:.3f} yaw={r['yaw']:6.1f} t=({r['tx']:+7.2f},{r['ty']:+7.2f}) "
+            f"fwd={r['fwd']:.3f} rev={r['rev']:.3f} score={r['score']:.4f}"
+        )
 
     # distinct candidate basins: rev only VETOES collapsed candidates (a
     # shrunken splat explains almost none of the lidar), then rank by fwd
@@ -613,13 +629,13 @@ def run(name, cfg, args):
     gnx = int((lil[:, 0].max() - gx0) / GCELL) + 2
     gny = int((lil[:, 1].max() - gy0) / GCELL) + 2
     gm = lil[(lil[:, 2] > -1.8) & (lil[:, 2] < 0.8)]
-    Hg, _, _ = np.histogram2d(gm[:, 0], gm[:, 1], bins=[gnx, gny],
-                              range=[[gx0, gx0 + gnx * GCELL],
-                                     [gy0, gy0 + gny * GCELL]])
+    Hg, _, _ = np.histogram2d(
+        gm[:, 0], gm[:, 1], bins=[gnx, gny], range=[[gx0, gx0 + gnx * GCELL], [gy0, gy0 + gny * GCELL]]
+    )
     om = lil[(lil[:, 2] > 0.4) & (lil[:, 2] < 2.0)]
-    Ho, _, _ = np.histogram2d(om[:, 0], om[:, 1], bins=[gnx, gny],
-                              range=[[gx0, gx0 + gnx * GCELL],
-                                     [gy0, gy0 + gny * GCELL]])
+    Ho, _, _ = np.histogram2d(
+        om[:, 0], om[:, 1], bins=[gnx, gny], range=[[gx0, gx0 + gnx * GCELL], [gy0, gy0 + gny * GCELL]]
+    )
 
     def path_stats(s, yaw, tx, ty):
         r = np.radians(yaw)
@@ -639,28 +655,28 @@ def run(name, cfg, args):
         r_["path_ground"], r_["path_obst"] = g, o
     ok = [r for r in scored if r["path_ground"] >= 0.6 and r["path_obst"] <= 0.35]
     if len(ok) < 2:
-        print("WARNING: <2 candidates keep the camera path on scanned ground "
-              ">=0.6; relaxing to 0.4")
-        ok = [r for r in scored if r["path_ground"] >= 0.4 and
-              r["path_obst"] <= 0.45]
+        print("WARNING: <2 candidates keep the camera path on scanned ground " ">=0.6; relaxing to 0.4")
+        ok = [r for r in scored if r["path_ground"] >= 0.4 and r["path_obst"] <= 0.45]
     if not ok:
-        print("WARNING: NO candidate keeps the camera path on scanned ground; "
-              "proceeding unfiltered -- treat the result as untrusted")
+        print(
+            "WARNING: NO candidate keeps the camera path on scanned ground; "
+            "proceeding unfiltered -- treat the result as untrusted"
+        )
         ok = scored
     rev_max = max(r["rev"] for r in ok)
     survivors = [r for r in ok if r["rev"] >= 0.5 * rev_max]
     survivors.sort(key=lambda r: -r["fwd"])
     basins = []
     for r in survivors:
-        if any(abs(np.log(r["s"] / b["s"])) < 0.06 and
-               min(abs(r["yaw"] - b["yaw"]), 360 - abs(r["yaw"] - b["yaw"])) < 6
-               for b in basins):
+        if any(
+            abs(np.log(r["s"] / b["s"])) < 0.06 and min(abs(r["yaw"] - b["yaw"]), 360 - abs(r["yaw"] - b["yaw"])) < 6
+            for b in basins
+        ):
             continue
         basins.append(r)
         if len(basins) >= 5:
             break
-    print(f"{len(basins)} distinct basins kept "
-          f"({[(round(b['s'], 3), b['yaw']) for b in basins]})")
+    print(f"{len(basins)} distinct basins kept " f"({[(round(b['s'], 3), b['yaw']) for b in basins]})")
 
     # --- 5. crop lidar to the UNION of the basins' footprints, refit ground
     # LOCALLY there (the campus ground is sloped; a global plane misleads)
@@ -668,25 +684,20 @@ def run(name, cfg, args):
     hi = -lo.copy()
     for b in basins:
         zin = splat_band_mask(spl[:, 2], b["s"], band, cfg["z_min_u"])
-        Q = transform_pts(spl[zin], b["s"], b["yaw"],
-                          np.array([b["tx"], b["ty"], 0.0]))
+        Q = transform_pts(spl[zin], b["s"], b["yaw"], np.array([b["tx"], b["ty"], 0.0]))
         m = 0.15 * max(np.ptp(Q[:, 0]), np.ptp(Q[:, 1])) + 4 * cfg["cell"]
         lo = np.minimum(lo, Q[:, :2].min(0) - m)
         hi = np.maximum(hi, Q[:, :2].max(0) + m)
-    crop = (lil[:, 0] > lo[0]) & (lil[:, 0] < hi[0]) & \
-           (lil[:, 1] > lo[1]) & (lil[:, 1] < hi[1])
+    crop = (lil[:, 0] > lo[0]) & (lil[:, 0] < hi[0]) & (lil[:, 1] > lo[1]) & (lil[:, 1] < hi[1])
     li_crop_raw = li_raw[crop]
     print(f"lidar crop to footprint+{m:.1f}m margin: {len(li_crop_raw)} pts")
-    lowc = li_crop_raw[li_crop_raw[:, 2] <
-                       np.percentile(li_crop_raw[:, 2], 30)]
-    gn_lc, gd_lc, gin_lc, _ = fit_floor(lowc, cam_med_z=lowc[:, 2].max() + 1.0,
-                                        thresh=cfg["line_thresh"])
+    lowc = li_crop_raw[li_crop_raw[:, 2] < np.percentile(li_crop_raw[:, 2], 30)]
+    gn_lc, gd_lc, gin_lc, _ = fit_floor(lowc, cam_med_z=lowc[:, 2].max() + 1.0, thresh=cfg["line_thresh"])
     R_l = leveling(gn_lc, gd_lc)
     lic = li_crop_raw @ R_l.T
     lic[:, 2] -= gd_lc
     tilt = np.degrees(np.arccos(np.clip(gn_l @ gn_lc, -1, 1)))
-    print(f"lidar local ground: n={gn_lc.round(4)} d={gd_lc:.3f} inl={gin_lc} "
-          f"(tilt vs global: {tilt:.2f} deg)")
+    print(f"lidar local ground: n={gn_lc.round(4)} d={gd_lc:.3f} inl={gin_lc} " f"(tilt vs global: {tilt:.2f} deg)")
 
     # --- 6. multi-basin refinement in the locally-leveled crop. The coarse
     # score (fwd*rev) can prefer a stretched registration whose fuzzy splat
@@ -695,44 +706,42 @@ def run(name, cfg, args):
     # collapsed candidates), converge ICP in each, and adjudicate by the
     # tight-eps forward inlier fraction on structure points -- precision of
     # matched structure, which the wrong basin cannot fake.
-    lbc = voxel_down(lic[(lic[:, 2] > band[0]) & (lic[:, 2] < band[1])],
-                     cfg["cell"])
-    ltree_band = cKDTree(lbc if len(lbc) <= 150000
-                         else lbc[rng.choice(len(lbc), 150000, replace=False)])
-    lslab = voxel_down(lic[(lic[:, 2] > -1.0) & (lic[:, 2] < band[1] + 1.0)],
-                       cfg["cell"] / 2)
-    ltree_full = cKDTree(lslab if len(lslab) <= 250000
-                         else lslab[rng.choice(len(lslab), 250000, replace=False)])
-    lstruct = voxel_down(lic[(lic[:, 2] > cfg["struct_lo"]) &
-                             (lic[:, 2] < band[1])], cfg["cell"] / 2)
+    lbc = voxel_down(lic[(lic[:, 2] > band[0]) & (lic[:, 2] < band[1])], cfg["cell"])
+    ltree_band = cKDTree(lbc if len(lbc) <= 150000 else lbc[rng.choice(len(lbc), 150000, replace=False)])
+    lslab = voxel_down(lic[(lic[:, 2] > -1.0) & (lic[:, 2] < band[1] + 1.0)], cfg["cell"] / 2)
+    ltree_full = cKDTree(lslab if len(lslab) <= 250000 else lslab[rng.choice(len(lslab), 250000, replace=False)])
+    lstruct = voxel_down(lic[(lic[:, 2] > cfg["struct_lo"]) & (lic[:, 2] < band[1])], cfg["cell"] / 2)
     if len(lstruct) > 150000:
         lstruct = lstruct[rng.choice(len(lstruct), 150000, replace=False)]
     ltree_struct = cKDTree(lstruct)
-    lstruct_fix = lstruct if len(lstruct) <= 15000 else \
-        lstruct[rng.choice(len(lstruct), 15000, replace=False)]
+    lstruct_fix = lstruct if len(lstruct) <= 15000 else lstruct[rng.choice(len(lstruct), 15000, replace=False)]
     results = []
     for b in basins:
-        fine = coarse_search(spl, lbc, (b["s"] * 0.93, b["s"] * 1.07),
-                             cell=cfg["cell"] / 2, yaw_step=0.75,
-                             scale_step=1.01, band=band, n_keep=20,
-                             yaw_range=(b["yaw"] - 4.0, b["yaw"] + 4.0),
-                             z_min_u=cfg["z_min_u"])
-        fine_scored = rescore(fine, spl, lbc, ltree_band, band, cfg["nn_eps"],
-                              z_min_u=cfg["z_min_u"])
+        fine = coarse_search(
+            spl,
+            lbc,
+            (b["s"] * 0.93, b["s"] * 1.07),
+            cell=cfg["cell"] / 2,
+            yaw_step=0.75,
+            scale_step=1.01,
+            band=band,
+            n_keep=20,
+            yaw_range=(b["yaw"] - 4.0, b["yaw"] + 4.0),
+            z_min_u=cfg["z_min_u"],
+        )
+        fine_scored = rescore(fine, spl, lbc, ltree_band, band, cfg["nn_eps"], z_min_u=cfg["z_min_u"])
         if not fine_scored:
             continue
         fb = max(fine_scored, key=lambda r: r["fwd"])
         slab = spl[(spl[:, 2] * fb["s"] > -0.5) & (spl[:, 2] * fb["s"] < band[1])]
         s_i, yaw_i, t_i, st_i = icp_refine(
-            slab, ltree_full, fb["s"], fb["yaw"],
-            np.array([fb["tx"], fb["ty"], 0.0]), cfg["icp_trims"])
+            slab, ltree_full, fb["s"], fb["yaw"], np.array([fb["tx"], fb["ty"], 0.0]), cfg["icp_trims"]
+        )
         if not st_i:  # ICP never matched anything: dead candidate
-            print(f"basin s0={b['s']:.3f} yaw0={b['yaw']:.1f} -> ICP found no "
-                  f"matches, dropped")
+            print(f"basin s0={b['s']:.3f} yaw0={b['yaw']:.1f} -> ICP found no " f"matches, dropped")
             continue
         # adjudication: tight-eps precision on structure points
-        P = spl[splat_band_mask(spl[:, 2], s_i, (cfg["struct_lo"], band[1]),
-                                cfg["z_min_u"])]
+        P = spl[splat_band_mask(spl[:, 2], s_i, (cfg["struct_lo"], band[1]), cfg["z_min_u"])]
         if len(P) > 20000:
             P = P[rng.choice(len(P), 20000, replace=False)]
         if len(P) < 200:
@@ -749,14 +758,27 @@ def run(name, cfg, args):
         # path-on-ground fraction folds in the walkability constraint.
         g_i, o_i = path_stats(s_i, yaw_i, t_i[0], t_i[1])
         tight = tight_fwd * tight_rev * g_i
-        results.append(dict(start_s=b["s"], start_yaw=b["yaw"], s=s_i,
-                            yaw=yaw_i, t=t_i, icp_stats=st_i, tight_score=tight,
-                            tight_fwd=tight_fwd, tight_rev=tight_rev,
-                            path_ground=g_i, path_obst=o_i))
-        print(f"basin s0={b['s']:.3f} yaw0={b['yaw']:.1f} -> ICP s={s_i:.4f} "
-              f"yaw={yaw_i:.2f} t={t_i.round(3)} tight({cfg['eps_tight']}m) "
-              f"fwd={tight_fwd:.4f} rev={tight_rev:.4f} ground={g_i:.2f} "
-              f"score={tight:.4f}")
+        results.append(
+            dict(
+                start_s=b["s"],
+                start_yaw=b["yaw"],
+                s=s_i,
+                yaw=yaw_i,
+                t=t_i,
+                icp_stats=st_i,
+                tight_score=tight,
+                tight_fwd=tight_fwd,
+                tight_rev=tight_rev,
+                path_ground=g_i,
+                path_obst=o_i,
+            )
+        )
+        print(
+            f"basin s0={b['s']:.3f} yaw0={b['yaw']:.1f} -> ICP s={s_i:.4f} "
+            f"yaw={yaw_i:.2f} t={t_i.round(3)} tight({cfg['eps_tight']}m) "
+            f"fwd={tight_fwd:.4f} rev={tight_rev:.4f} ground={g_i:.2f} "
+            f"score={tight:.4f}"
+        )
     if not results:
         raise RuntimeError("no basin survived refinement")
     win = max(results, key=lambda r: r["tight_score"])
@@ -772,14 +794,11 @@ def run(name, cfg, args):
     # so the splat is projected at exactly the right angle -- its fuzzy walls
     # defeat independent line fitting (they yield one line and miss the rest).
     fband = cfg["facade_band"]
-    wc_l = wall_cells(lic, cell=cfg["cell"], zmin=fband[0], zmax=fband[1],
-                      min_cover=args.min_cover)
-    lines_l = seq_line_ransac(wc_l, thresh=cfg["line_thresh"],
-                              min_in=args.min_line_cells, n_lines=10, iters=2500)
+    wc_l = wall_cells(lic, cell=cfg["cell"], zmin=fband[0], zmax=fband[1], min_cover=args.min_cover)
+    lines_l = seq_line_ransac(wc_l, thresh=cfg["line_thresh"], min_in=args.min_line_cells, n_lines=10, iters=2500)
     print(f"lidar wall cells {len(wc_l)} -> {len(lines_l)} lines")
     for l in lines_l:
-        print(f"  lidar line: th={l['theta']:7.2f} d={l['d']:8.3f}m "
-              f"nin={l['nin']:4d} seg={l['seg']:.2f}m")
+        print(f"  lidar line: th={l['theta']:7.2f} d={l['d']:8.3f}m " f"nin={l['nin']:4d} seg={l['seg']:.2f}m")
     fams = []
     for l in sorted(lines_l, key=lambda x: -x["nin"]):
         for f in fams:
@@ -790,8 +809,7 @@ def run(name, cfg, args):
             fams.append(dict(theta=l["theta"], nlines=1))
     fams = fams[:4]
 
-    lbf = voxel_down(lic[(lic[:, 2] > fband[0]) & (lic[:, 2] < fband[1])],
-                     cfg["cell"] / 2)
+    lbf = voxel_down(lic[(lic[:, 2] > fband[0]) & (lic[:, 2] < fband[1])], cfg["cell"] / 2)
     zs = splat_band_mask(spl[:, 2], s_icp, fband, cfg["z_min_u"])
     spl_fac = spl[zs & (dnear < args.facade_crop)]
     print(f"facade band: lidar {len(lbf)} pts, splat {len(spl_fac)} pts")
@@ -806,18 +824,32 @@ def run(name, cfg, args):
         # (whiteboards, blinds -- what the splat actually reconstructs in
         # front of featureless walls) are present, and wall/furniture doubles
         # ~0.12 m apart stay resolved
-        pk_l = profile_peaks(lbf, nv_l, binw=binw_l, zmin=fband[0],
-                             zmax=fband[1], min_sep=2 * binw_l, min_frac=0.03,
-                             min_count=max(30, int(0.001 * len(lbf))),
-                             min_cover=args.min_cover, max_peaks=10)
+        pk_l = profile_peaks(
+            lbf,
+            nv_l,
+            binw=binw_l,
+            zmin=fband[0],
+            zmax=fband[1],
+            min_sep=2 * binw_l,
+            min_frac=0.03,
+            min_count=max(30, int(0.001 * len(lbf))),
+            min_cover=args.min_cover,
+            max_peaks=10,
+        )
         th_s = th_l - yaw_icp
         nv_s = np.array([np.cos(np.radians(th_s)), np.sin(np.radians(th_s))])
         # splat side: HIGH threshold, so the fuzz shoulders of a thick splat
         # wall (sub-peaks at ~20% of the main one) do not spawn fake planes
-        pk_s = profile_peaks(spl_fac, nv_s, binw=binw_s,
-                             zmin=fband[0] / s_icp, zmax=fband[1] / s_icp,
-                             min_sep=3 * binw_s, min_frac=args.splat_peak_frac,
-                             min_cover=args.min_cover)
+        pk_s = profile_peaks(
+            spl_fac,
+            nv_s,
+            binw=binw_s,
+            zmin=fband[0] / s_icp,
+            zmax=fband[1] / s_icp,
+            min_sep=3 * binw_s,
+            min_frac=args.splat_peak_frac,
+            min_cover=args.min_cover,
+        )
         c = float(t_icp[:2] @ nv_l)
         cand = []
         for si, ps in enumerate(pk_s):
@@ -837,12 +869,16 @@ def run(name, cfg, args):
                 continue
             used_s.add(si)
             used_l.add(li)
-            matches.append(dict(splat_offset_units=pk_s[si]["offset"],
-                                mapped_m=float(mapped),
-                                lidar_offset_m=pk_l[li]["offset"],
-                                err_m=float(err),
-                                splat_count=pk_s[si]["count"],
-                                lidar_count=pk_l[li]["count"]))
+            matches.append(
+                dict(
+                    splat_offset_units=pk_s[si]["offset"],
+                    mapped_m=float(mapped),
+                    lidar_offset_m=pk_l[li]["offset"],
+                    err_m=float(err),
+                    splat_count=pk_s[si]["count"],
+                    lidar_count=pk_l[li]["count"],
+                )
+            )
         for a in range(len(matches)):
             for b in range(a + 1, len(matches)):
                 ma, mb = matches[a], matches[b]
@@ -852,31 +888,38 @@ def run(name, cfg, args):
                     continue
                 if gap_l / gap_s <= 0:  # ordering flip = bad correspondence
                     continue
-                pairs.append(dict(
-                    family_theta_lidar_deg=float(th_l),
-                    lidar_offsets_m=[ma["lidar_offset_m"], mb["lidar_offset_m"]],
-                    splat_offsets_units=[ma["splat_offset_units"],
-                                         mb["splat_offset_units"]],
-                    gap_lidar_m=float(abs(gap_l)),
-                    gap_splat_units=float(abs(gap_s)),
-                    scale=float(gap_l / gap_s)))
-        families.append(dict(theta_lidar_deg=float(th_l),
-                             theta_splat_deg=float(th_s % 180.0),
-                             lidar_peaks=pk_l, splat_peaks=pk_s,
-                             matches=matches))
+                pairs.append(
+                    dict(
+                        family_theta_lidar_deg=float(th_l),
+                        lidar_offsets_m=[ma["lidar_offset_m"], mb["lidar_offset_m"]],
+                        splat_offsets_units=[ma["splat_offset_units"], mb["splat_offset_units"]],
+                        gap_lidar_m=float(abs(gap_l)),
+                        gap_splat_units=float(abs(gap_s)),
+                        scale=float(gap_l / gap_s),
+                    )
+                )
+        families.append(
+            dict(
+                theta_lidar_deg=float(th_l),
+                theta_splat_deg=float(th_s % 180.0),
+                lidar_peaks=pk_l,
+                splat_peaks=pk_s,
+                matches=matches,
+            )
+        )
         print(f"family th_l={th_l:.2f} th_s={th_s % 180:.2f}:")
-        print("  lidar peaks:", [(round(p['offset'], 3), p['count'],
-                                  'V' if p['is_vertical'] else 'h')
-                                 for p in pk_l])
-        print("  splat peaks:", [(round(p['offset'], 3), p['count'],
-                                  'V' if p['is_vertical'] else 'h')
-                                 for p in pk_s])
-        print(f"  matches: {[(round(m['splat_offset_units'], 2), round(m['lidar_offset_m'], 2), round(m['err_m'], 2)) for m in matches]}")
+        print("  lidar peaks:", [(round(p["offset"], 3), p["count"], "V" if p["is_vertical"] else "h") for p in pk_l])
+        print("  splat peaks:", [(round(p["offset"], 3), p["count"], "V" if p["is_vertical"] else "h") for p in pk_s])
+        print(
+            f"  matches: {[(round(m['splat_offset_units'], 2), round(m['lidar_offset_m'], 2), round(m['err_m'], 2)) for m in matches]}"
+        )
     print(f"{len(pairs)} parallel plane pairs:")
     for p in pairs:
-        print(f"  fam {p['family_theta_lidar_deg']:6.1f} deg: lidar gap "
-              f"{p['gap_lidar_m']:.3f} m / splat gap {p['gap_splat_units']:.3f} u "
-              f"-> scale {p['scale']:.4f}")
+        print(
+            f"  fam {p['family_theta_lidar_deg']:6.1f} deg: lidar gap "
+            f"{p['gap_lidar_m']:.3f} m / splat gap {p['gap_splat_units']:.3f} u "
+            f"-> scale {p['scale']:.4f}"
+        )
 
     # --- 8. final scale. Pairs are weighted by their lidar gap: a 0.1 m peak
     # error is 8% on a 1.3 m gap but 0.7% on a 14 m one, so wide pairs carry
@@ -887,15 +930,16 @@ def run(name, cfg, args):
     if len(pair_vals) >= 2:
         order = np.argsort(pair_vals)
         cw = np.cumsum(pair_w[order])
-        wmed = float(pair_vals[order][min(len(order) - 1,
-                                          np.searchsorted(cw, cw[-1] / 2))])
+        wmed = float(pair_vals[order][min(len(order) - 1, np.searchsorted(cw, cw[-1] / 2))])
         big = pair_vals[pair_w >= 3 * args.min_gap]
         subset = big if len(big) >= 2 else pair_vals
-        if (subset.max() / subset.min() < 1.12 and
-                abs(np.log(wmed / s_icp)) < 0.10):
+        if subset.max() / subset.min() < 1.12 and abs(np.log(wmed / s_icp)) < 0.10:
             s_final, method = wmed, "plane_pairs_gap_weighted_median"
-    if method == "registration_icp" and len(pair_vals) >= 1 and \
-            abs(np.log(pair_vals[np.argmax(pair_w)] / s_icp)) < 0.08:
+    if (
+        method == "registration_icp"
+        and len(pair_vals) >= 1
+        and abs(np.log(pair_vals[np.argmax(pair_w)] / s_icp)) < 0.08
+    ):
         s_final = float(np.mean([pair_vals[np.argmax(pair_w)], s_icp]))
         method = "widest_pair_and_icp_mean"
     # re-polish yaw/translation at the FIXED final scale so the Sim(3) is
@@ -903,10 +947,9 @@ def run(name, cfg, args):
     s_report_repolish = float(s_icp)
     if abs(np.log(s_final / s_icp)) > 1e-6:
         _, yaw_icp, t_icp, _ = icp_refine(
-            slab, ltree_full, s_final, yaw_icp, t_icp, cfg["icp_trims"][-3:],
-            fix_scale=True)
-    print(f"FINAL scale = {s_final:.4f} m/unit ({method}); "
-          f"icp={s_icp:.4f}, pairs={pair_vals.round(4).tolist()}")
+            slab, ltree_full, s_final, yaw_icp, t_icp, cfg["icp_trims"][-3:], fix_scale=True
+        )
+    print(f"FINAL scale = {s_final:.4f} m/unit ({method}); " f"icp={s_icp:.4f}, pairs={pair_vals.round(4).tolist()}")
 
     # --- 9. compose Sim(3): raw splat -> lidar metric
     r = np.radians(yaw_icp)
@@ -931,24 +974,29 @@ def run(name, cfg, args):
         n = min(len(P), 20000)
         X = P[rng.choice(len(P), n, replace=False)]
         Q = (M[:3, :3] @ X.T).T + M[:3, 3]
-        tree = cKDTree(li_crop_raw if len(li_crop_raw) <= 400000 else
-                       li_crop_raw[rng.choice(len(li_crop_raw), 400000, replace=False)])
+        tree = cKDTree(
+            li_crop_raw
+            if len(li_crop_raw) <= 400000
+            else li_crop_raw[rng.choice(len(li_crop_raw), 400000, replace=False)]
+        )
         d, _ = tree.query(Q, k=1)
         cov = d < 2.0  # points landing where the scan has ANY coverage
-        return dict(n=int(n), median_m=float(np.median(d)),
-                    p90_m=float(np.percentile(d, 90)),
-                    frac_lt_0p25m=float((d < 0.25).mean()),
-                    frac_lt_0p50m=float((d < 0.50).mean()),
-                    frac_in_scan_coverage=float(cov.mean()),
-                    median_covered_m=float(np.median(d[cov])) if cov.any()
-                    else None)
+        return dict(
+            n=int(n),
+            median_m=float(np.median(d)),
+            p90_m=float(np.percentile(d, 90)),
+            frac_lt_0p25m=float((d < 0.25).mean()),
+            frac_lt_0p50m=float((d < 0.50).mean()),
+            frac_in_scan_coverage=float(cov.mean()),
+            median_covered_m=float(np.median(d[cov])) if cov.any() else None,
+        )
+
     spu_s = sp_raw @ A.T
     dpath_s, _ = ctree.query(spu_s[:, :2], k=1)
     spn_s_raw = sp_raw[dpath_s < cfg["path_crop"]]
     spl_s = (spn_s_raw @ A.T) @ R_s.T
     spl_s[:, 2] -= gd_s
-    sp_band_raw = spn_s_raw[
-        (spl_s[:, 2] * s_final > -0.5) & (spl_s[:, 2] * s_final < band[1])]
+    sp_band_raw = spn_s_raw[(spl_s[:, 2] * s_final > -0.5) & (spl_s[:, 2] * s_final < band[1])]
     res_band = residuals(sp_band_raw)
     res_all = residuals(spn_s_raw)
     print(f"splat residuals (band): {res_band}")
@@ -957,67 +1005,85 @@ def run(name, cfg, args):
     ctrl = None
     if cfg["expected_scale"] is not None:
         ok = abs(s_final - cfg["expected_scale"]) <= 0.02
-        ctrl = dict(expected_scale=cfg["expected_scale"], recovered=s_final,
-                    passed=bool(ok))
-        print(f"CONTROL: expected {cfg['expected_scale']} recovered {s_final:.4f} "
-              f"-> {'PASS' if ok else 'FAIL'}")
+        ctrl = dict(expected_scale=cfg["expected_scale"], recovered=s_final, passed=bool(ok))
+        print(f"CONTROL: expected {cfg['expected_scale']} recovered {s_final:.4f} " f"-> {'PASS' if ok else 'FAIL'}")
 
     out = dict(
         dataset=name,
         date=datetime.datetime.now().isoformat(timespec="seconds"),
         command=" ".join(sys.argv),
-        inputs=dict(splat=cfg["splat"], lidar=cfg["lidar"],
-                    images_bin=cfg["images_bin"],
-                    registration_cloud=reg_src,
-                    sfm_points=cfg["sfm_points"] if reg_src == "sfm" else None),
-        up_axis=dict(chosen=chosen, scores=up_scores,
-                     note="splat axis whose ground plane lies below the cameras"),
+        inputs=dict(
+            splat=cfg["splat"],
+            lidar=cfg["lidar"],
+            images_bin=cfg["images_bin"],
+            registration_cloud=reg_src,
+            sfm_points=cfg["sfm_points"] if reg_src == "sfm" else None,
+        ),
+        up_axis=dict(chosen=chosen, scores=up_scores, note="splat axis whose ground plane lies below the cameras"),
         ground=dict(
-            splat=dict(normal_zup_frame=gn_s.tolist(), d_units=float(gd_s),
-                       inliers=int(gin_s),
-                       cameras_above_floor_units=cam_h),
-            lidar_global=dict(normal=gn_l.tolist(), d_m=float(gd_l),
-                              inliers=int(gin_l)),
-            lidar_local_crop=dict(normal=gn_lc.tolist(), d_m=float(gd_lc),
-                                  inliers=int(gin_lc),
-                                  tilt_vs_global_deg=float(tilt))),
+            splat=dict(
+                normal_zup_frame=gn_s.tolist(), d_units=float(gd_s), inliers=int(gin_s), cameras_above_floor_units=cam_h
+            ),
+            lidar_global=dict(normal=gn_l.tolist(), d_m=float(gd_l), inliers=int(gin_l)),
+            lidar_local_crop=dict(
+                normal=gn_lc.tolist(), d_m=float(gd_lc), inliers=int(gin_lc), tilt_vs_global_deg=float(tilt)
+            ),
+        ),
         registration=dict(
-            coarse=dict(scale=best["s"], yaw_deg=best["yaw"],
-                        t_xy_m=[best["tx"], best["ty"]],
-                        fwd_inlier_frac=best["fwd"], rev_inlier_frac=best["rev"]),
-            basins=[dict(start_scale=r["start_s"], start_yaw_deg=r["start_yaw"],
-                         icp_scale=float(r["s"]), icp_yaw_deg=float(r["yaw"]),
-                         icp_t_m=[float(v) for v in r["t"]],
-                         tight_fwd=r["tight_fwd"], tight_rev=r["tight_rev"],
-                         path_ground=r["path_ground"], path_obst=r["path_obst"],
-                         tight_score=r["tight_score"]) for r in results],
+            coarse=dict(
+                scale=best["s"],
+                yaw_deg=best["yaw"],
+                t_xy_m=[best["tx"], best["ty"]],
+                fwd_inlier_frac=best["fwd"],
+                rev_inlier_frac=best["rev"],
+            ),
+            basins=[
+                dict(
+                    start_scale=r["start_s"],
+                    start_yaw_deg=r["start_yaw"],
+                    icp_scale=float(r["s"]),
+                    icp_yaw_deg=float(r["yaw"]),
+                    icp_t_m=[float(v) for v in r["t"]],
+                    tight_fwd=r["tight_fwd"],
+                    tight_rev=r["tight_rev"],
+                    path_ground=r["path_ground"],
+                    path_obst=r["path_obst"],
+                    tight_score=r["tight_score"],
+                )
+                for r in results
+            ],
             adjudication=f"winner = max fwd*rev inlier product at "
-                         f"{cfg['eps_tight']} m on structure points, times the "
-                         f"fraction of the camera path on scanned ground",
-            icp=dict(scale=float(s_icp), yaw_deg=float(yaw_icp),
-                     t_m=t_icp.tolist(), **icp_stats)),
+            f"{cfg['eps_tight']} m on structure points, times the "
+            f"fraction of the camera path on scanned ground",
+            icp=dict(scale=float(s_icp), yaw_deg=float(yaw_icp), t_m=t_icp.tolist(), **icp_stats),
+        ),
         planes=dict(
-            lidar_lines_m=[dict(theta_deg=l["theta"], offset=l["d"],
-                                cells=l["nin"], seg=l["seg"])
-                           for l in lines_l],
-            families=families),
+            lidar_lines_m=[dict(theta_deg=l["theta"], offset=l["d"], cells=l["nin"], seg=l["seg"]) for l in lines_l],
+            families=families,
+        ),
         scale_pairs=pairs,
-        scale=dict(final_m_per_unit=s_final, method=method,
-                   icp_scale=float(s_icp),
-                   icp_repolish_at_final=float(s_report_repolish),
-                   pair_estimates=pair_vals.tolist(),
-                   pair_spread=(float(pair_vals.max() - pair_vals.min())
-                                if len(pair_vals) else None)),
-        residuals=dict(band=res_band, all_near_path=res_all,
-                       note="NN distance (m) of transformed splat points to the "
-                            "lidar crop; 'band' excludes floaters outside the "
-                            "registration slab"),
-        sim3=dict(matrix_splat_to_lidar_metric=[[float(v) for v in row]
-                                                for row in M],
-                  scale=s_final,
-                  gravity_up_in_splat_coords=up_in_splat.tolist(),
-                  note="x_lidar = M[:3,:3] @ x_splat + M[:3,3]; lidar frame is "
-                       "the raw georeferenced metric frame of lidar_sub.npy"),
+        scale=dict(
+            final_m_per_unit=s_final,
+            method=method,
+            icp_scale=float(s_icp),
+            icp_repolish_at_final=float(s_report_repolish),
+            pair_estimates=pair_vals.tolist(),
+            pair_spread=(float(pair_vals.max() - pair_vals.min()) if len(pair_vals) else None),
+        ),
+        residuals=dict(
+            band=res_band,
+            all_near_path=res_all,
+            note="NN distance (m) of transformed splat points to the "
+            "lidar crop; 'band' excludes floaters outside the "
+            "registration slab",
+        ),
+        sim3=dict(
+            matrix_splat_to_lidar_metric=[[float(v) for v in row] for row in M],
+            scale=s_final,
+            gravity_up_in_splat_coords=up_in_splat.tolist(),
+            note="x_lidar = M[:3,:3] @ x_splat + M[:3,3]; lidar frame is "
+            "the raw georeferenced metric frame of lidar_sub.npy",
+        ),
         control=ctrl,
     )
     with open(cfg["out"], "w") as f:
@@ -1030,22 +1096,26 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("dataset", choices=sorted(PRESETS))
     root = os.environ.get("VILOTA_DATASETS")
-    ap.add_argument("--datasets", default=root, required=root is None,
-                    help="folder that holds meetingroom/ and main_campus/ (default $VILOTA_DATASETS)")
+    ap.add_argument(
+        "--datasets",
+        default=root,
+        required=root is None,
+        help="folder that holds meetingroom/ and main_campus/ (default $VILOTA_DATASETS)",
+    )
     ap.add_argument("--up-axis", choices=["auto", "-y", "+y"], default="auto")
-    ap.add_argument("--register-with", choices=["splat", "sfm"], default=None,
-                    help="override the preset's registration cloud")
-    ap.add_argument("--facade-crop", type=float, default=None,
-                    help="splat units around camera path for facade candidates")
-    ap.add_argument("--min-cover", type=float, default=0.45,
-                    help="min z-coverage fraction for a wall cell")
+    ap.add_argument(
+        "--register-with", choices=["splat", "sfm"], default=None, help="override the preset's registration cloud"
+    )
+    ap.add_argument(
+        "--facade-crop", type=float, default=None, help="splat units around camera path for facade candidates"
+    )
+    ap.add_argument("--min-cover", type=float, default=0.45, help="min z-coverage fraction for a wall cell")
     ap.add_argument("--min-line-cells", type=int, default=14)
-    ap.add_argument("--off-tol", type=float, default=None,
-                    help="plane match offset tolerance, metres")
-    ap.add_argument("--splat-peak-frac", type=float, default=None,
-                    help="splat profile peak threshold, fraction of max peak")
-    ap.add_argument("--min-gap", type=float, default=1.0,
-                    help="min plane-pair gap (m) used for a scale estimate")
+    ap.add_argument("--off-tol", type=float, default=None, help="plane match offset tolerance, metres")
+    ap.add_argument(
+        "--splat-peak-frac", type=float, default=None, help="splat profile peak threshold, fraction of max peak"
+    )
+    ap.add_argument("--min-gap", type=float, default=1.0, help="min plane-pair gap (m) used for a scale estimate")
     args = ap.parse_args()
     cfg = dict(PRESETS[args.dataset])
     for key in ("splat", "lidar", "images_bin", "out", "sfm_points"):

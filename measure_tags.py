@@ -23,9 +23,7 @@ import numpy as np
 def find_tags(gray, min_side=25):
     """Return min-area rectangles of dark four-sided blobs."""
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    thr = cv2.adaptiveThreshold(
-        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 51, 10
-    )
+    thr = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 51, 10)
     contours, _ = cv2.findContours(thr, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
     rects = []
@@ -38,7 +36,7 @@ def find_tags(gray, min_side=25):
         if len(approx) != 4 or not cv2.isContourConvex(approx):
             continue
         rect = cv2.minAreaRect(c)
-        (w, h) = rect[1]
+        w, h = rect[1]
         if min(w, h) < min_side:
             continue
         # A tag is a filled quad, so the contour should fill its own box.
@@ -77,8 +75,7 @@ def main():
 
     found = find_tags(gray, args.min_side)
     if not found:
-        print(f"{args.image}: {w}x{h}, no tags found. "
-              f"Try a frame where the board is larger, or lower --min-side.")
+        print(f"{args.image}: {w}x{h}, no tags found. " f"Try a frame where the board is larger, or lower --min-side.")
         return
 
     rows = []
@@ -90,8 +87,7 @@ def main():
     print(f"{args.image}: {w}x{h}, {len(rows)} tag-like quads")
     print("  most face-on first")
     for sk, ratio, wid, hei, _ in rows[:10]:
-        print(f"    diagonals {sk:.3f}   w/h = {ratio:.3f}   "
-              f"({wid:6.1f} x {hei:6.1f} px)")
+        print(f"    diagonals {sk:.3f}   w/h = {ratio:.3f}   " f"({wid:6.1f} x {hei:6.1f} px)")
 
     top = [r[1] for r in rows[:10]]
     print(f"\n  mean w/h over the 10 most face-on: {sum(top)/len(top):.3f}")

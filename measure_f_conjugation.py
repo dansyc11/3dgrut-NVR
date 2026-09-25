@@ -10,6 +10,7 @@ table below makes visible.
 
 No polyscope, no rendering, no GPU. Do not run playground.py for this.
 """
+
 import os
 import sys
 
@@ -56,10 +57,9 @@ def main():
 
     for i in sorted(before):
         assert np.allclose(after[i], before[i], atol=1e-9), (
-            f"cam {i}: loaded != post-move, "
-            f"|diff| = {np.linalg.norm(after[i] - before[i])}")
-    print("\nASSERT PASS: loaded view_matrix == post-move view_matrix "
-          "for all cameras")
+            f"cam {i}: loaded != post-move, " f"|diff| = {np.linalg.norm(after[i] - before[i])}"
+        )
+    print("\nASSERT PASS: loaded view_matrix == post-move view_matrix " "for all cameras")
 
 
 if __name__ == "__main__":

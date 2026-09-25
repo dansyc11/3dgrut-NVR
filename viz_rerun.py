@@ -27,13 +27,21 @@ import rerun as rr
 
 sys.path.append("/opt/vilota/messages")
 import capnp  # noqa: E402
+
 capnp.add_import_hook()
-import tagdetection_capnp as T  # noqa: E402
 import image_capnp as VKI  # noqa: E402
+import tagdetection_capnp as T  # noqa: E402
 from mcap.reader import make_reader  # noqa: E402
 
-PALETTE = [(230, 80, 60), (60, 180, 230), (250, 200, 40), (120, 220, 120),
-           (220, 120, 220), (255, 150, 50), (150, 150, 255)]
+PALETTE = [
+    (230, 80, 60),
+    (60, 180, 230),
+    (250, 200, 40),
+    (120, 220, 120),
+    (220, 120, 220),
+    (255, 150, 50),
+    (150, 150, 255),
+]
 
 
 def set_frame(i, stamp_ns=None):
@@ -65,14 +73,15 @@ def decode_image(img):
         step = w
     try:
         if enc.endswith("mono8"):
-            return buf[:h * step].reshape(h, step)[:, :w]
+            return buf[: h * step].reshape(h, step)[:, :w]
         if enc.endswith("bgr8"):
-            a = buf[:h * step].reshape(h, step)[:, :w * 3].reshape(h, w, 3)
+            a = buf[: h * step].reshape(h, step)[:, : w * 3].reshape(h, w, 3)
             return a[:, :, ::-1]
         if enc.endswith("yuv420") or enc.endswith("nv12"):
-            return buf[:h * step].reshape(-1, step)[:h, :w]
+            return buf[: h * step].reshape(-1, step)[:h, :w]
         if enc.endswith("jpeg") or enc.endswith("png"):
             from PIL import Image as PILImage
+
             return np.asarray(PILImage.open(io.BytesIO(img.data)))
     except ValueError:
         return None
@@ -110,8 +119,10 @@ DEFAULT_SZ = 0.5
 def board_half_extents(rows, cols, tag_cm, spacing=0.3):
     """Half width / height of a board with its border, as boards.py:150-155."""
     s = tag_cm / 100.0
-    return ((cols + spacing * (cols - 1) + 2 * spacing) * s / 2.0,
-            (rows + spacing * (rows - 1) + 2 * spacing) * s / 2.0)
+    return (
+        (cols + spacing * (cols - 1) + 2 * spacing) * s / 2.0,
+        (rows + spacing * (rows - 1) + 2 * spacing) * s / 2.0,
+    )
 
 
 def board_outline(entry, specs, sz=DEFAULT_SZ):
@@ -126,13 +137,10 @@ def board_outline(entry, specs, sz=DEFAULT_SZ):
     if "sx" in entry:
         sx, sy = float(entry["sx"]), float(entry["sy"])
     else:
-        sx, sy = board_half_extents(rows, cols, entry.get("tag_cm", 15.0),
-                                    entry.get("spacing", 0.3))
+        sx, sy = board_half_extents(rows, cols, entry.get("tag_cm", 15.0), entry.get("spacing", 0.3))
     z = QUAD_Z * sz
-    local = np.array([[-sx, -sy, z], [sx, -sy, z], [sx, sy, z],
-                      [-sx, sy, z], [-sx, -sy, z]])
-    return local @ rot_matrix(entry.get("rot", [0, 0, 0])).T \
-        + np.array(entry["pos"], dtype=float)
+    local = np.array([[-sx, -sy, z], [sx, -sy, z], [sx, sy, z], [-sx, sy, z], [-sx, -sy, z]])
+    return local @ rot_matrix(entry.get("rot", [0, 0, 0])).T + np.array(entry["pos"], dtype=float)
 
 
 def read_board_specs(path):
@@ -141,8 +149,7 @@ def read_board_specs(path):
     if not Path(path).exists():
         return out
     text = Path(path).read_text()
-    for name, rows, cols in re.findall(
-            r'\(\s*"([a-z0-9_]+)"\s*,\s*(\d+)\s*,\s*(\d+)\s*,', text):
+    for name, rows, cols in re.findall(r'\(\s*"([a-z0-9_]+)"\s*,\s*(\d+)\s*,\s*(\d+)\s*,', text):
         out[name] = (int(rows), int(cols))
     out.setdefault("aprilgrid", (4, 7))
     return out
@@ -160,19 +167,20 @@ def log_scene(scene_file, boards_py, traj_csv, sz=DEFAULT_SZ):
             pts = board_outline(b, specs, sz)
             w = float(np.linalg.norm(pts[1] - pts[0]))
             h = float(np.linalg.norm(pts[2] - pts[1]))
-            rr.log("world/boards/" + mat,
-                   rr.LineStrips3D([pts], colors=[PALETTE[i % len(PALETTE)]],
-                                   labels=[mat + " " + str(rows) + "x" + str(cols)]),
-                   static=True)
-            print("  board " + mat + "  " + str(round(w, 3)) + " x "
-                  + str(round(h, 3)) + " m  at " + str(b["pos"]))
+            rr.log(
+                "world/boards/" + mat,
+                rr.LineStrips3D(
+                    [pts], colors=[PALETTE[i % len(PALETTE)]], labels=[mat + " " + str(rows) + "x" + str(cols)]
+                ),
+                static=True,
+            )
+            print("  board " + mat + "  " + str(round(w, 3)) + " x " + str(round(h, 3)) + " m  at " + str(b["pos"]))
 
     if Path(traj_csv).exists():
         with open(traj_csv) as fh:
             rows = list(csv.DictReader(fh))
         eye = np.array([[float(r["x"]), float(r["y"]), float(r["z"])] for r in rows])
-        rr.log("world/eye_path", rr.LineStrips3D([eye], colors=[(180, 180, 180)]),
-               static=True)
+        rr.log("world/eye_path", rr.LineStrips3D([eye], colors=[(180, 180, 180)]), static=True)
         print("  eye path " + str(len(eye)) + " poses")
         return eye
     return None
@@ -226,14 +234,33 @@ def process_cam(args, cam, multi, grid_order):
             with T.TagDetections.from_bytes(msg.data) as m:
                 if not meta_printed:
                     im = m.image
-                    print("camera " + cam + ": " + str(im.width) + "x"
-                          + str(im.height) + "  encoding " + str(im.encoding)
-                          + "  exposure " + str(im.exposureUSec) + " us"
-                          + "  gain " + str(im.gain))
+                    print(
+                        "camera "
+                        + cam
+                        + ": "
+                        + str(im.width)
+                        + "x"
+                        + str(im.height)
+                        + "  encoding "
+                        + str(im.encoding)
+                        + "  exposure "
+                        + str(im.exposureUSec)
+                        + " us"
+                        + "  gain "
+                        + str(im.gain)
+                    )
                     print("declared grids: " + str(len(m.grids)))
                     for g in m.grids:
-                        print("  gridId " + str(g.gridId) + "  " + str(g.tagRows)
-                              + "x" + str(g.tagCols) + "  size " + str(round(g.tagSize, 5)))
+                        print(
+                            "  gridId "
+                            + str(g.gridId)
+                            + "  "
+                            + str(g.tagRows)
+                            + "x"
+                            + str(g.tagCols)
+                            + "  size "
+                            + str(round(g.tagSize, 5))
+                        )
                     meta_printed = True
 
                 key = int(m.header.seq) if multi else n
@@ -250,8 +277,7 @@ def process_cam(args, cam, multi, grid_order):
                     xy = pts[:8].reshape(4, 2)
                     if norm_mode is None:
                         norm_mode = bool(np.max(xy) <= 2.0)
-                        print("pointsPolygon is "
-                              + ("normalised 0..1" if norm_mode else "pixels"))
+                        print("pointsPolygon is " + ("normalised 0..1" if norm_mode else "pixels"))
                     if norm_mode:
                         xy = xy * np.array([m.image.width, m.image.height])
                     spans.append(float(max(xy.max(0) - xy.min(0))))
@@ -265,29 +291,31 @@ def process_cam(args, cam, multi, grid_order):
                     set_frame(key, int(m.header.stampMonotonic) if multi else None)
                     rr.log(prefix + "/image", rr.Image(images[key]))
                     if strips:
-                        rr.log(prefix + "/image/tags",
-                               rr.LineStrips2D(strips, colors=colors, labels=labels))
+                        rr.log(prefix + "/image/tags", rr.LineStrips2D(strips, colors=colors, labels=labels))
                     else:
                         rr.log(prefix + "/image/tags", rr.Clear(recursive=False))
                     log_scalar(stats_prefix + "/tags_per_frame", len(tags))
-                    log_scalar(stats_prefix + "/grids_per_frame",
-                               len({int(t.gridId) for t in tags}))
+                    log_scalar(stats_prefix + "/grids_per_frame", len({int(t.gridId) for t in tags}))
             n += 1
 
     arr = np.array(per_frame)
     print("")
     print("frames " + str(len(arr)) + "   total detections " + str(int(arr.sum())))
-    print("empty frames " + str(int((arr == 0).sum())) + " ("
-          + str(round(100.0 * (arr == 0).mean(), 1)) + " percent)")
+    print("empty frames " + str(int((arr == 0).sum())) + " (" + str(round(100.0 * (arr == 0).mean(), 1)) + " percent)")
     print("frames with 4 or more tags " + str(int((arr >= 4).sum())))
     print("per grid:")
     for gid, c in grid_hits.most_common():
         print("  " + str(gid) + "  " + str(c))
     if spans:
         s = np.array(spans)
-        print("tag span px: p5 " + str(round(float(np.percentile(s, 5)), 1))
-              + "  median " + str(round(float(np.median(s)), 1))
-              + "  p95 " + str(round(float(np.percentile(s, 95)), 1)))
+        print(
+            "tag span px: p5 "
+            + str(round(float(np.percentile(s, 5)), 1))
+            + "  median "
+            + str(round(float(np.median(s)), 1))
+            + "  p95 "
+            + str(round(float(np.percentile(s, 95)), 1))
+        )
 
 
 def main():
@@ -297,12 +325,17 @@ def main():
     p.add_argument("--traj", default="")
     p.add_argument("--scene", default="office_scene.json")
     p.add_argument("--boards-py", default="threedgrut_playground/utils/boards.py")
-    p.add_argument("--sz", type=float, default=DEFAULT_SZ,
-                   help="quad z scale the boards were rendered with "
-                        "(engine autoscale: 0.5 in scenes wider than 5 units)")
-    p.add_argument("--cam", default="camd",
-                   help="one camera, or a comma list (cama,camb,camc,camd) to "
-                        "tile all of them in one recording")
+    p.add_argument(
+        "--sz",
+        type=float,
+        default=DEFAULT_SZ,
+        help="quad z scale the boards were rendered with " "(engine autoscale: 0.5 in scenes wider than 5 units)",
+    )
+    p.add_argument(
+        "--cam",
+        default="camd",
+        help="one camera, or a comma list (cama,camb,camc,camd) to " "tile all of them in one recording",
+    )
     p.add_argument("--stride", type=int, default=10)
     p.add_argument("--save", default="", help="write an .rrd instead of opening a window")
     p.add_argument("--stats-only", action="store_true")
@@ -318,7 +351,7 @@ def main():
         print("scene:")
         log_scene(args.scene, args.boards_py, args.traj, args.sz)
 
-    grid_order = []          # shared first-seen grid order -> stable colours
+    grid_order = []  # shared first-seen grid order -> stable colours
     for cam in cams:
         if multi:
             print("\n=== " + cam + " ===")

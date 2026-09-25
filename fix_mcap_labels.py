@@ -42,9 +42,7 @@ def convert(in_path, out_path, wanted, serial=None):
         writer = Writer(fout)
         writer.start(profile="VisualKit", library="fix_mcap_labels")
 
-        schema_id = writer.register_schema(
-            name="vkc.Image", encoding="capnp", data=load_schema_bytes()
-        )
+        schema_id = writer.register_schema(name="vkc.Image", encoding="capnp", data=load_schema_bytes())
 
         channels = {}
         counts = {}
@@ -106,12 +104,14 @@ def main():
     p.add_argument("input")
     p.add_argument("output")
     p.add_argument("--topics", nargs="*", default=None)
-    p.add_argument("--serial", default=None,
-                   help="Write this device serial into every header frameId. "
-                        "vk_calibrate needs it, and the playground leaves it empty.")
+    p.add_argument(
+        "--serial",
+        default=None,
+        help="Write this device serial into every header frameId. "
+        "vk_calibrate needs it, and the playground leaves it empty.",
+    )
     args = p.parse_args()
-    convert(args.input, args.output,
-            set(args.topics) if args.topics else None, args.serial)
+    convert(args.input, args.output, set(args.topics) if args.topics else None, args.serial)
 
 
 if __name__ == "__main__":

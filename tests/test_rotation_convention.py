@@ -21,6 +21,7 @@ Checks:
 
 Run:  python tests/test_rotation_convention.py
 """
+
 import ast
 import glob
 import importlib
@@ -85,7 +86,9 @@ def main():
         n_eng = engine_rotation(cls, rot) @ np.array([0.0, 0.0, -1.0])
         n_viz = np.asarray(viz_rerun.rot_matrix(rot), float) @ np.array([0.0, 0.0, -1.0])
         assert d < TOL, f"{b['material']}: rot_matrix differs from the engine by {d:.2e}"
-        print(f"PASS  {b['material']:<12} rot {rot}: max |diff| {d:.2e}, normal {np.round(n_eng, 4)} == {np.round(n_viz, 4)}")
+        print(
+            f"PASS  {b['material']:<12} rot {rot}: max |diff| {d:.2e}, normal {np.round(n_eng, 4)} == {np.round(n_viz, 4)}"
+        )
         n_pass += 1
 
     # 3. angle sweep: each axis alone, then combined

@@ -89,7 +89,12 @@ import numpy as np
 
 from threedgrut_playground.utils import scene_alignment
 from threedgrut_playground.utils.orbit_trajectory import (
-    FIT_HALF_FOV_X_DEG, FIT_HALF_FOV_Y_DEG, UP_AXIS, board_frame, frame_from)
+    FIT_HALF_FOV_X_DEG,
+    FIT_HALF_FOV_Y_DEG,
+    UP_AXIS,
+    board_frame,
+    frame_from,
+)
 
 # body_T_camd rotation (x, y, z, w) - keep in sync with
 # mcap_convertor.BODY_Q_REF (not imported: that module pulls in capnp).
@@ -98,17 +103,18 @@ BODY_Q_CAMD = np.array([0.5, -0.5, 0.5, -0.5])
 START_TIME_NS = 1_000_000_000  # mcap_convertor's default start_time_ns
 
 # Motion design constants. Periods in seconds, amplitudes in degrees.
-RAMP_S = 4.0            # speed ramp after the stationary lead
+RAMP_S = 4.0  # speed ramp after the stationary lead
 T_DIST, T_AZ, T_EL = 20.0, 16.0, 11.0
 T_AIMX, T_AIMY, T_ROLL = 9.0, 13.0, 7.0
 AZ_EYE_AMP_DEG, EL_EYE_AMP_DEG, ROLL_AMP_DEG = 20.0, 14.0, 5.0
-NEAR_BAND_F, FAR_BAND_F = 1.06, 2.1   # x the FIT_HALF_FOV fit distance
+NEAR_BAND_F, FAR_BAND_F = 1.06, 2.1  # x the FIT_HALF_FOV fit distance
 AIM_MARGIN_X_DEG, AIM_MARGIN_Y_DEG = 8.0, 6.0
-EDGE_PAD_PX = 30.0      # usable-half-field solve stays this far inside
+EDGE_PAD_PX = 30.0  # usable-half-field solve stays this far inside
 
 
 # ---------------------------------------------------------------------------
 # Camera models (parameters always read from the device file, never guessed)
+
 
 def project_kb4(pts, p):
     """(N,3) optical-frame points -> (N,2) pixels + validity, KB4 model."""
@@ -161,19 +167,17 @@ def load_rig(calib_path):
     for sock, cam in data["cameraData"]:
         dc, K = cam["distortionCoeff"], cam["intrinsicMatrix"]
         if cam["cameraType"] == 0:
-            model, p = "ds", dict(fx=dc[5], fy=dc[6], cx=dc[7], cy=dc[8],
-                                  xi=dc[9], alpha=dc[10])
+            model, p = "ds", dict(fx=dc[5], fy=dc[6], cx=dc[7], cy=dc[8], xi=dc[9], alpha=dc[10])
         else:
-            model, p = "kb4", dict(fx=K[0][0], fy=K[1][1], cx=K[0][2],
-                                   cy=K[1][2], k1=dc[0], k2=dc[1],
-                                   k3=dc[2], k4=dc[3])
+            model, p = "kb4", dict(
+                fx=K[0][0], fy=K[1][1], cx=K[0][2], cy=K[1][2], k1=dc[0], k2=dc[1], k3=dc[2], k4=dc[3]
+            )
         T = np.eye(4)
         ext = cam["extrinsics"]
         if sock != ref:
             T[:3, :3] = np.array(ext["rotationMatrix"])
             T[:3, 3] = [ext["translation"][k] / 100.0 for k in "xyz"]
-        cams[sock] = {"model": model, "params": p, "width": cam["width"],
-                      "height": cam["height"], "T_camd_cam": T}
+        cams[sock] = {"model": model, "params": p, "width": cam["width"], "height": cam["height"], "T_camd_cam": T}
     return cams, ref
 
 
@@ -189,6 +193,7 @@ def usable_half_angle(cam, axis, pad_px=EDGE_PAD_PX):
         d[0, 2] = math.cos(theta)
         px, ok = _project(d, cam)
         return bool(ok[0]) and 0 + pad_px < px[0, axis] < limit
+
     lo, hi = 0.05, math.radians(120.0)
     if not inside(lo):
         raise ValueError("projection invalid even near the axis")
@@ -204,14 +209,17 @@ def usable_half_angle(cam, axis, pad_px=EDGE_PAD_PX):
 # ---------------------------------------------------------------------------
 # Path generation (pure)
 
+
 class VioConfig:
     def __init__(self):
         env = os.environ.get
         self.lead_s = float(env("STATIONARY_LEAD_S", 3.0))
         self.motion_s = float(env("VIO_MOTION_S", 40.0))
         if self.motion_s < T_DIST:
-            print(f"[vio] VIO_MOTION_S {self.motion_s:.0f} s < one distance "
-                  f"cycle ({T_DIST:.0f} s): extending (never speeding up)")
+            print(
+                f"[vio] VIO_MOTION_S {self.motion_s:.0f} s < one distance "
+                f"cycle ({T_DIST:.0f} s): extending (never speeding up)"
+            )
             self.motion_s = T_DIST
         self.fps = float(env("VIO_FPS", 20.0))
         self.trackable_px = float(env("TRACKABLE_PX", 50.0))
@@ -244,8 +252,8 @@ class PathGeometry:
         self.hz = float(np.abs(rel @ self.fwd).max())
 
         d_fit = self.hz + max(
-            self.hx / math.tan(math.radians(FIT_HALF_FOV_X_DEG)),
-            self.hy / math.tan(math.radians(FIT_HALF_FOV_Y_DEG)))
+            self.hx / math.tan(math.radians(FIT_HALF_FOV_X_DEG)), self.hy / math.tan(math.radians(FIT_HALF_FOV_Y_DEG))
+        )
 
         # Usable half fields of the reference camera, minus a margin and
         # minus what the roll oscillation rotates in from the OTHER axis at
@@ -263,8 +271,8 @@ class PathGeometry:
         # centre and coverage would die).
         g_min = math.radians(6.0)
         d_bud = self.hz + max(
-            self.hx / math.tan(math.radians(self.bud_x) - g_min),
-            self.hy / math.tan(math.radians(self.bud_y) - g_min))
+            self.hx / math.tan(math.radians(self.bud_x) - g_min), self.hy / math.tan(math.radians(self.bud_y) - g_min)
+        )
         self.d_near = max(NEAR_BAND_F * d_fit, d_bud)
         self.d_far = max(FAR_BAND_F * d_fit, 1.6 * self.d_near)
         dist_env = os.environ.get("ORBIT_DIST")
@@ -279,7 +287,8 @@ class PathGeometry:
             raise ValueError(
                 f"aim budget collapses at the near band (gx {gx:.1f}, "
                 f"gy {gy:.1f} deg): boards too large for these distances - "
-                "raise ORBIT_DIST or shrink the boards")
+                "raise ORBIT_DIST or shrink the boards"
+            )
 
 
 def _tau(t, lead):
@@ -290,7 +299,7 @@ def _tau(t, lead):
     if tp >= RAMP_S:
         return 0.5 * RAMP_S + (tp - RAMP_S)
     u = tp / RAMP_S
-    return RAMP_S * (u ** 4 * (u * (u - 3.0) + 2.5))
+    return RAMP_S * (u**4 * (u * (u - 3.0) + 2.5))
 
 
 def _look_at_gl(eye, aim, roll_rad):
@@ -319,10 +328,12 @@ def pose_at(t, cfg, geom):
     d = d_mid + d_amp * math.sin(w * tau / T_DIST)
     az = math.radians(AZ_EYE_AMP_DEG) * math.sin(w * tau / T_AZ)
     el = math.radians(EL_EYE_AMP_DEG) * math.sin(w * tau / T_EL)
-    eye = (geom.center
-           + geom.fwd * (d * math.cos(el) * math.cos(az))
-           + geom.right * (d * math.cos(el) * math.sin(az))
-           + geom.up * (d * math.sin(el)))
+    eye = (
+        geom.center
+        + geom.fwd * (d * math.cos(el) * math.cos(az))
+        + geom.right * (d * math.cos(el) * math.sin(az))
+        + geom.up * (d * math.sin(el))
+    )
 
     view = geom.center - eye
     dist = float(np.linalg.norm(view))
@@ -331,8 +342,7 @@ def pose_at(t, cfg, geom):
     ax = gx * math.sin(w * tau / T_AIMX)
     ay = gy * math.sin(w * tau / T_AIMY)
     cam_r, cam_u = frame_from(view / dist)
-    aim = (geom.center + cam_r * (dist * math.tan(ax))
-           + cam_u * (dist * math.tan(ay)))
+    aim = geom.center + cam_r * (dist * math.tan(ax)) + cam_u * (dist * math.tan(ay))
     roll = math.radians(ROLL_AMP_DEG) * math.sin(w * tau / T_ROLL)
     return eye, _look_at_gl(eye, aim, roll)
 
@@ -350,10 +360,9 @@ def sample_path(cfg, geom, times=None, pose_fn=None):
     eyes = np.empty((len(times), 3))
     R_wc = np.empty((len(times), 3, 3))
     for i, t in enumerate(times):
-        eye, R_gl = (pose_at(float(t), cfg, geom) if pose_fn is None
-                     else pose_fn(float(t)))
+        eye, R_gl = pose_at(float(t), cfg, geom) if pose_fn is None else pose_fn(float(t))
         eyes[i] = eye
-        R_wc[i] = R_gl.T @ F3   # columns = optical axes in world
+        R_wc[i] = R_gl.T @ F3  # columns = optical axes in world
     return np.asarray(times, float), eyes, R_wc
 
 
@@ -361,30 +370,29 @@ def _rot_to_quat(m):
     tr = m[0, 0] + m[1, 1] + m[2, 2]
     if tr > 0:
         s = math.sqrt(tr + 1.0) * 2
-        q = [(m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s,
-             (m[1, 0] - m[0, 1]) / s, 0.25 * s]
+        q = [(m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s, 0.25 * s]
     elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
         s = math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2
-        q = [0.25 * s, (m[0, 1] + m[1, 0]) / s,
-             (m[0, 2] + m[2, 0]) / s, (m[2, 1] - m[1, 2]) / s]
+        q = [0.25 * s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s, (m[2, 1] - m[1, 2]) / s]
     elif m[1, 1] > m[2, 2]:
         s = math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2
-        q = [(m[0, 1] + m[1, 0]) / s, 0.25 * s,
-             (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s]
+        q = [(m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s]
     else:
         s = math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2
-        q = [(m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s,
-             0.25 * s, (m[1, 0] - m[0, 1]) / s]
+        q = [(m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s, (m[1, 0] - m[0, 1]) / s]
     q = np.array(q)
     return q / np.linalg.norm(q)
 
 
 def _quat_to_rot(q):
     x, y, z, w = q / np.linalg.norm(q)
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
 
 
 def export_npz(path, cfg, eyes, R_wc, extra_meta=None):
@@ -393,7 +401,7 @@ def export_npz(path, cfg, eyes, R_wc, extra_meta=None):
     extra_meta: dict merged into the meta json (the stress CLI stamps
     STRESS/seed/source/failed checks); None leaves the meta unchanged."""
     t_ns = START_TIME_NS + np.arange(len(eyes), dtype=np.int64) * cfg.interval_ns
-    R_cam_body = _quat_to_rot(BODY_Q_CAMD).T   # camd <- body
+    R_cam_body = _quat_to_rot(BODY_Q_CAMD).T  # camd <- body
     q_body = np.empty((len(eyes), 4))
     q_camd = np.empty((len(eyes), 4))
     for i in range(len(eyes)):
@@ -401,24 +409,27 @@ def export_npz(path, cfg, eyes, R_wc, extra_meta=None):
         q_body[i] = _rot_to_quat(R_wc[i] @ R_cam_body)
     meta = dict(
         frame="p, q_xyzw = T_world_body: body = BODY_Q_CAMD * camD-optical "
-              "(the NWU body the rendered images declare in "
-              "extrinsic.bodyFrame), world = playground/polyscope scene "
-              "frame (constant offset to vk_vio's odom frame; ate_compare "
-              "aligns it)",
+        "(the NWU body the rendered images declare in "
+        "extrinsic.bodyFrame), world = playground/polyscope scene "
+        "frame (constant offset to vk_vio's odom frame; ate_compare "
+        "aligns it)",
         stamp=f"t_ns = {START_TIME_NS} + i * {cfg.interval_ns} - identical "
-              "to the mcap_convertor stamps at Frames Between = 1",
-        fps=cfg.fps, stationary_lead_s=cfg.lead_s, motion_s=cfg.motion_s,
-        body_q_camd_xyzw=BODY_Q_CAMD.tolist())
+        "to the mcap_convertor stamps at Frames Between = 1",
+        fps=cfg.fps,
+        stationary_lead_s=cfg.lead_s,
+        motion_s=cfg.motion_s,
+        body_q_camd_xyzw=BODY_Q_CAMD.tolist(),
+    )
     if extra_meta:
         meta.update(extra_meta)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    np.savez(path, t_ns=t_ns, p=eyes, q_xyzw=q_body,
-             p_camd=eyes, q_xyzw_camd=q_camd, meta=json.dumps(meta))
+    np.savez(path, t_ns=t_ns, p=eyes, q_xyzw=q_body, p_camd=eyes, q_xyzw_camd=q_camd, meta=json.dumps(meta))
     return t_ns
 
 
 # ---------------------------------------------------------------------------
 # Verification (no renders: exact projections through the device file)
+
 
 def _rotvec(Ra, Rb):
     """Rotation vector of Ra^T Rb."""
@@ -427,15 +438,14 @@ def _rotvec(Ra, Rb):
     ang = math.acos(cos)
     if ang < 1e-12:
         return np.zeros(3)
-    return ang / (2 * math.sin(ang)) * np.array(
-        [R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    return ang / (2 * math.sin(ang)) * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
 
 
 def _spike_ratio(mag, motion_mask):
     """max / 95th percentile of a finite-difference magnitude series over
     the motion phase. Smooth signals sit near 1; a C2 break shows as an
     isolated spike whose ratio grows with fps."""
-    m = mag[motion_mask[:len(mag)]]
+    m = mag[motion_mask[: len(mag)]]
     if len(m) == 0 or m.max() <= 1e-9:
         return 1.0
     return float(m.max() / max(np.percentile(m, 95.0), 1e-9))
@@ -455,21 +465,20 @@ def run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
     dt = 1.0 / cfg.fps
     pts_w = geom.cloud
     if check_cams is None:
-        check_cams = [s for s, c in rig.items()
-                      if c["model"] == "kb4" and s != 0]
+        check_cams = [s for s, c in rig.items() if c["model"] == "kb4" and s != 0]
 
     dists = np.linalg.norm(eyes - geom.center, axis=1)
     band_w = geom.d_far - geom.d_near
     near_f = dists <= geom.d_near + 0.15 * band_w
     far_f = dists >= geom.d_far - 0.15 * band_w
-    checks.append(("distance bands visited",
-                   bool(near_f.any() and far_f.any()),
-                   "distance bands not both visited", True))
+    checks.append(
+        ("distance bands visited", bool(near_f.any() and far_f.any()), "distance bands not both visited", True)
+    )
 
     # per-camera projections over the whole path
-    cams = {s: rig[s] for s in set(list(rig)) }
+    cams = {s: rig[s] for s in set(list(rig))}
     cov = {}
-    steps_frame = np.zeros(n)   # measured corner step into frame i, max cam
+    steps_frame = np.zeros(n)  # measured corner step into frame i, max cam
     for s, cam in cams.items():
         w, h = cam["width"], cam["height"]
         cx, cy = cam["params"]["cx"], cam["params"]["cy"]
@@ -483,12 +492,11 @@ def run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
         inside_all = np.zeros(n, bool)
         for i in range(n):
             Rcw = R_wc[i]
-            pts_cam = (pts_w - eyes[i]) @ Rcw          # camD optical
+            pts_cam = (pts_w - eyes[i]) @ Rcw  # camD optical
             pts_cam = (pts_cam @ T_cam_camd[:3, :3].T) + T_cam_camd[:3, 3]
             px, ok = _project(pts_cam, cam)
             ok = ok & (pts_cam[:, 2] > 0)
-            inside = ok & (px[:, 0] >= 0) & (px[:, 0] < w) \
-                        & (px[:, 1] >= 0) & (px[:, 1] < h)
+            inside = ok & (px[:, 0] >= 0) & (px[:, 0] < w) & (px[:, 1] >= 0) & (px[:, 1] < h)
             inside_all[i] = inside.all()
             if inside.any():
                 u, v = px[inside, 0], px[inside, 1]
@@ -512,26 +520,46 @@ def run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
                     max_step = max(max_step, float(step))
                     steps_frame[i] = max(steps_frame[i], float(step))
             prev_px, prev_ok = px, inside
-        cov[s] = dict(quad=quad, hist=hist, span_u=(umin, umax),
-                      span_v=(vmin, vmax), near=in_near, far=in_far,
-                      max_step_px=max_step, always_inside=bool(inside_all.all()),
-                      inside_frames=inside_all)
+        cov[s] = dict(
+            quad=quad,
+            hist=hist,
+            span_u=(umin, umax),
+            span_v=(vmin, vmax),
+            near=in_near,
+            far=in_far,
+            max_step_px=max_step,
+            always_inside=bool(inside_all.all()),
+            inside_frames=inside_all,
+        )
 
     # boards stay in view of the reference camera, every frame
-    checks.append(("boards inside reference cam",
-                   bool(cov[ref_sock]["always_inside"]),
-                   "board corners leave the reference camera's image", True))
+    checks.append(
+        (
+            "boards inside reference cam",
+            bool(cov[ref_sock]["always_inside"]),
+            "board corners leave the reference camera's image",
+            True,
+        )
+    )
 
     for s in check_cams:
         c = cov[s]
-        checks.append((f"quadrant coverage cam{'abcd'[s]}",
-                       bool((c["quad"] > 0).all()),
-                       f"socket {s}: quadrant counts {c['quad'].tolist()} - not all four",
-                       True))
-        checks.append((f"both bands seen by cam{'abcd'[s]}",
-                       bool(c["near"] > 0 and c["far"] > 0),
-                       f"socket {s}: corners missing from a distance band "
-                       f"(near {c['near']}, far {c['far']})", True))
+        checks.append(
+            (
+                f"quadrant coverage cam{'abcd'[s]}",
+                bool((c["quad"] > 0).all()),
+                f"socket {s}: quadrant counts {c['quad'].tolist()} - not all four",
+                True,
+            )
+        )
+        checks.append(
+            (
+                f"both bands seen by cam{'abcd'[s]}",
+                bool(c["near"] > 0 and c["far"] > 0),
+                f"socket {s}: corners missing from a distance band " f"(near {c['near']}, far {c['far']})",
+                True,
+            )
+        )
 
     # kinematics
     v = np.gradient(eyes, dt, axis=0)
@@ -544,29 +572,37 @@ def run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
         a=float(np.linalg.norm(a, axis=1).max()),
         jerk=float(np.linalg.norm(jerk, axis=1).max()),
         w=float(np.linalg.norm(wvec, axis=1).max()),
-        alpha=float(np.linalg.norm(alpha, axis=1).max()))
+        alpha=float(np.linalg.norm(alpha, axis=1).max()),
+    )
 
     # trackability: focal x angular step + translation flow at the nearest
     # board point, per frame (the design formula), plus the measured corner
     # step from the projections above. Both must clear TRACKABLE_PX.
     f_max = max(c["params"]["fx"] for c in cams.values())
-    d_min = np.array([np.linalg.norm(pts_w - eyes[i], axis=1).min()
-                      for i in range(n)])
+    d_min = np.array([np.linalg.norm(pts_w - eyes[i], axis=1).min() for i in range(n)])
     dth = np.linalg.norm(wvec, axis=1) * dt
     dp = np.linalg.norm(np.diff(eyes, axis=0), axis=1)
     px_bound = f_max * dth + f_max * dp / d_min[:-1]
     peak["px_formula"] = float(px_bound.max())
     peak["px_measured"] = max(c["max_step_px"] for c in cov.values())
-    checks.append(("px formula <= ceiling",
-                   peak["px_formula"] <= cfg.trackable_px,
-                   f"per-frame displacement bound {peak['px_formula']:.1f} px exceeds "
-                   f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)",
-                   True))
-    checks.append(("px measured <= ceiling",
-                   peak["px_measured"] <= cfg.trackable_px,
-                   f"measured corner step {peak['px_measured']:.1f} px exceeds "
-                   f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)",
-                   True))
+    checks.append(
+        (
+            "px formula <= ceiling",
+            peak["px_formula"] <= cfg.trackable_px,
+            f"per-frame displacement bound {peak['px_formula']:.1f} px exceeds "
+            f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)",
+            True,
+        )
+    )
+    checks.append(
+        (
+            "px measured <= ceiling",
+            peak["px_measured"] <= cfg.trackable_px,
+            f"measured corner step {peak['px_measured']:.1f} px exceeds "
+            f"TRACKABLE_PX {cfg.trackable_px:.0f} - raise VIO_FPS (never the speed)",
+            True,
+        )
+    )
 
     # C2 finite-difference spike check (advisory: verify_path never raises
     # on it, the dry-run verdict table shows it)
@@ -576,18 +612,32 @@ def run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
     motion = np.asarray(times, float) >= cfg.lead_s
     jr = _spike_ratio(np.linalg.norm(jerk, axis=1), motion)
     ar = _spike_ratio(np.linalg.norm(alpha, axis=1), motion)
-    checks.append(("C2 finite-diff spike", bool(jr < 20.0 and ar < 20.0),
-                   f"jerk spike ratio {jr:.1f}, angular accel spike ratio "
-                   f"{ar:.1f} (max/95th pct over the motion phase, smooth < 20)",
-                   False))
+    checks.append(
+        (
+            "C2 finite-diff spike",
+            bool(jr < 20.0 and ar < 20.0),
+            f"jerk spike ratio {jr:.1f}, angular accel spike ratio "
+            f"{ar:.1f} (max/95th pct over the motion phase, smooth < 20)",
+            False,
+        )
+    )
 
-    series = dict(speed=np.linalg.norm(v, axis=1),
-                  ang_rate=np.linalg.norm(wvec, axis=1),
-                  px_formula=px_bound, px_measured=steps_frame)
-    metrics = dict(peak=peak, coverage=cov, near_frames=int(near_f.sum()),
-                   far_frames=int(far_f.sum()), series=series,
-                   spike=dict(jerk_ratio=jr, alpha_ratio=ar),
-                   ref_sock=ref_sock, check_cams=check_cams)
+    series = dict(
+        speed=np.linalg.norm(v, axis=1),
+        ang_rate=np.linalg.norm(wvec, axis=1),
+        px_formula=px_bound,
+        px_measured=steps_frame,
+    )
+    metrics = dict(
+        peak=peak,
+        coverage=cov,
+        near_frames=int(near_f.sum()),
+        far_frames=int(far_f.sum()),
+        series=series,
+        spike=dict(jerk_ratio=jr, alpha_ratio=ar),
+        ref_sock=ref_sock,
+        check_cams=check_cams,
+    )
     return metrics, checks
 
 
@@ -599,8 +649,7 @@ def verify_path(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams=None):
     bands (default: every KB4 camera except socket 0 - camA points away
     from the boards on this product and is not consumed by the driver).
     """
-    metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes,
-                                 R_wc, check_cams)
+    metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc, check_cams)
     for _name, ok, msg, strict in checks:
         if strict and not ok:
             raise AssertionError(msg)
@@ -614,27 +663,35 @@ def _print_table(cfg, geom, rig, metrics, n):
     near_frames, far_frames = metrics["near_frames"], metrics["far_frames"]
     print(f"[vio] | quantity | value |")
     print(f"[vio] |----|----|")
-    print(f"[vio] | duration | {cfg.total_s:.1f} s = {cfg.lead_s:.1f} s "
-          f"parked + {cfg.motion_s:.1f} s motion, {n} frames @ "
-          f"{cfg.fps:g} fps |")
-    print(f"[vio] | distance bands | near {geom.d_near:.2f} m "
-          f"({near_frames} frames), far {geom.d_far:.2f} m "
-          f"({far_frames} frames) |")
-    print(f"[vio] | peak translation | {peak['v']:.2f} m/s, "
-          f"{peak['a']:.2f} m/s^2 |")
-    print(f"[vio] | peak rotation | {math.degrees(peak['w']):.1f} deg/s, "
-          f"{math.degrees(peak['alpha']):.1f} deg/s^2 |")
-    print(f"[vio] | peak per-frame px | formula {peak['px_formula']:.1f}, "
-          f"measured {peak['px_measured']:.1f} (ceiling "
-          f"{cfg.trackable_px:.0f}) |")
+    print(
+        f"[vio] | duration | {cfg.total_s:.1f} s = {cfg.lead_s:.1f} s "
+        f"parked + {cfg.motion_s:.1f} s motion, {n} frames @ "
+        f"{cfg.fps:g} fps |"
+    )
+    print(
+        f"[vio] | distance bands | near {geom.d_near:.2f} m "
+        f"({near_frames} frames), far {geom.d_far:.2f} m "
+        f"({far_frames} frames) |"
+    )
+    print(f"[vio] | peak translation | {peak['v']:.2f} m/s, " f"{peak['a']:.2f} m/s^2 |")
+    print(
+        f"[vio] | peak rotation | {math.degrees(peak['w']):.1f} deg/s, " f"{math.degrees(peak['alpha']):.1f} deg/s^2 |"
+    )
+    print(
+        f"[vio] | peak per-frame px | formula {peak['px_formula']:.1f}, "
+        f"measured {peak['px_measured']:.1f} (ceiling "
+        f"{cfg.trackable_px:.0f}) |"
+    )
     for s in sorted(cov):
         c, cam = cov[s], cams[s]
         su, sv = c["span_u"], c["span_v"]
         wspan = 100 * (su[1] - su[0]) / cam["width"] if su[1] > su[0] else 0
-        print(f"[vio] | cam{'abcd'[s]} ({cam['model']}) | quadrants "
-              f"{c['quad'].tolist()}, u {su[0]:.0f}..{su[1]:.0f} "
-              f"({wspan:.0f}% of width), near/far corners "
-              f"{c['near']}/{c['far']}, max step {c['max_step_px']:.1f} px |")
+        print(
+            f"[vio] | cam{'abcd'[s]} ({cam['model']}) | quadrants "
+            f"{c['quad'].tolist()}, u {su[0]:.0f}..{su[1]:.0f} "
+            f"({wspan:.0f}% of width), near/far corners "
+            f"{c['near']}/{c['far']}, max step {c['max_step_px']:.1f} px |"
+        )
     for s in sorted(cov):
         print(f"[vio] cam{'abcd'[s]} corner histogram (rows top->bottom):")
         for row in cov[s]["hist"]:
@@ -644,9 +701,11 @@ def _print_table(cfg, geom, rig, metrics, n):
 # ---------------------------------------------------------------------------
 # GUI glue
 
+
 def _gather_scene(gui, name_hint):
     """Board vertex cloud + centre + normal from the live scene."""
     from threedgrut_playground.utils.boards import BOARD_NAMES
+
     objs = gui.primitives.objects
     target = os.environ.get("ORBIT_TARGET")
     if target:
@@ -676,21 +735,24 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     """Build the VIO path into the playground trajectory + export truth."""
     cfg = VioConfig()
     if cfg.stress != 1.0:
-        print(f"[vio] STRESS={cfg.stress:g}: frequencies and rates scaled, "
-              f"amplitudes and the stationary lead unchanged")
+        print(
+            f"[vio] STRESS={cfg.stress:g}: frequencies and rates scaled, "
+            f"amplitudes and the stationary lead unchanged"
+        )
     cloud, center, normal, label = _gather_scene(gui, name_hint)
     align = None
     if cfg.alignment_path:
         align = scene_alignment.load(cfg.alignment_path)
         cloud = cloud * align.scale
         center = center * align.scale
-        print(f"[vio] SCENE_ALIGNMENT {cfg.alignment_path}: scene is "
-              f"{align.scale:.4f} m/unit. Scene cloud converted to metres; "
-              f"the design and the truth npz are METRIC (scene axes); "
-              f"poses convert to scene units at the render boundary only")
+        print(
+            f"[vio] SCENE_ALIGNMENT {cfg.alignment_path}: scene is "
+            f"{align.scale:.4f} m/unit. Scene cloud converted to metres; "
+            f"the design and the truth npz are METRIC (scene axes); "
+            f"poses convert to scene units at the render boundary only"
+        )
     if flip or os.environ.get("ORBIT_FLIP"):
-        print("[vio] WARNING ORBIT_FLIP set: camera will be behind the "
-              "boards and tags will be mirrored")
+        print("[vio] WARNING ORBIT_FLIP set: camera will be behind the " "boards and tags will be mirrored")
         normal = -normal
     if os.environ.get("ARM_REACH"):
         print("[vio] ARM_REACH ignored: clamping would break C2 smoothness")
@@ -700,8 +762,7 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     rig, ref_sock = load_rig(calib_path)
     geom = PathGeometry(cloud, center, normal, rig[ref_sock])
     print(f"[vio] target {label}, calib {calib_path}")
-    print(f"[vio] bands {geom.d_near:.2f}..{geom.d_far:.2f} m, aim budget "
-          f"({geom.bud_x:.0f}, {geom.bud_y:.0f}) deg")
+    print(f"[vio] bands {geom.d_near:.2f}..{geom.d_far:.2f} m, aim budget " f"({geom.bud_x:.0f}, {geom.bud_y:.0f}) deg")
 
     pose_fn = None
     if cfg.waypoints_path:
@@ -710,10 +771,12 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
         if quats is not None:
             aims, rolls = _pose_waypoint_channels(way_eyes, quats, geom)
         pose_fn = spline_pose_fn(cfg, geom, way_eyes, aims, rolls)
-        print(f"[vio] VIO_WAYPOINTS {cfg.waypoints_path}: C2 spline "
-              f"circuit through {len(way_eyes)} waypoints replaces the "
-              f"analytic path (same lead/ramp/STRESS phase clock as the "
-              f"dry-run)")
+        print(
+            f"[vio] VIO_WAYPOINTS {cfg.waypoints_path}: C2 spline "
+            f"circuit through {len(way_eyes)} waypoints replaces the "
+            f"analytic path (same lead/ramp/STRESS phase clock as the "
+            f"dry-run)"
+        )
 
     times, eyes, R_wc = sample_path(cfg, geom, pose_fn=pose_fn)
     if pose_fn is None:
@@ -723,8 +786,7 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
         # Waypoint circuits may run in board-free scenes (campus corridor),
         # where the visibility checks fail by design: warn like the dry-run
         # instead of raising, and stamp the failures into the npz meta.
-        metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes,
-                                     R_wc)
+        metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc)
         for name, ok, msg, _strict in checks:
             if not ok:
                 print(f"[vio] WARN {name}: {msg}")
@@ -733,17 +795,16 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     if cfg.stress != 1.0:
         extra.update(stress=cfg.stress, source="analytic")
     if pose_fn is not None:
-        extra.update(stress=cfg.stress,
-                     source=f"waypoints {cfg.waypoints_path} "
-                            f"({len(way_eyes)} points)",
-                     seed=None,
-                     failed_checks=[c[0] for c in checks if not c[1]])
+        extra.update(
+            stress=cfg.stress,
+            source=f"waypoints {cfg.waypoints_path} " f"({len(way_eyes)} points)",
+            seed=None,
+            failed_checks=[c[0] for c in checks if not c[1]],
+        )
     if align is not None:
         extra["alignment"] = align.meta_dict()
-    t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc,
-                      extra_meta=extra or None)
-    print(f"[vio] ground truth: {cfg.npz_path} ({len(t_ns)} poses, "
-          f"T_world_body, stamps matching the mcap export)")
+    t_ns = export_npz(cfg.npz_path, cfg, eyes, R_wc, extra_meta=extra or None)
+    print(f"[vio] ground truth: {cfg.npz_path} ({len(t_ns)} poses, " f"T_world_body, stamps matching the mcap export)")
 
     # the mcap export must stamp at the same rate the path was sampled at
     os.environ["PLAYGROUND_FPS"] = str(cfg.fps)
@@ -755,9 +816,11 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
         # scene units too, or the rendered stereo baseline disagrees with
         # the metric calibration embedded in the messages by the scale.
         nvr.v_device.metres_per_unit = align.scale
-        print(f"[vio] render boundary: positions /= {align.scale:.4f} to "
-              f"scene units; rig extrinsic translations compose in scene "
-              f"units (message-embedded calibration stays metric)")
+        print(
+            f"[vio] render boundary: positions /= {align.scale:.4f} to "
+            f"scene units; rig extrinsic translations compose in scene "
+            f"units (message-embedded calibration stays metric)"
+        )
 
     nvr.create_new_trajectory()
     origin = nvr.get_origin_camera_index()
@@ -766,8 +829,7 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
     tail_t = cfg.n_frames / cfg.fps
     for i in range(cfg.n_frames + 1):
         t = tail_t if i == cfg.n_frames else float(times[i])
-        eye, R_gl = (pose_at(t, cfg, geom) if pose_fn is None
-                     else pose_fn(t))
+        eye, R_gl = pose_at(t, cfg, geom) if pose_fn is None else pose_fn(t)
         if align is not None:
             eye = align.metric_to_scene_units(eye)
         view = np.eye(4)
@@ -775,8 +837,7 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
         view[:3, 3] = -R_gl @ eye
         poses = nvr.add_pose_to_trajectory(view, origin)
     gui.orbit_first_pose = {c: 0 for c in range(4)}
-    print(f"[vio] {cfg.n_frames} frames ({cfg.n_frames + 1} poses incl. the "
-          f"unrendered tail) into the trajectory")
+    print(f"[vio] {cfg.n_frames} frames ({cfg.n_frames + 1} poses incl. the " f"unrendered tail) into the trajectory")
     return poses
 
 
@@ -785,6 +846,7 @@ def build_vio_trajectory(gui, name_hint="Quad", flip=False):
 # --waypoints files and --random rough waypoints. The circuit is closed so
 # any phase maps smoothly and STRESS simply laps it faster; the stationary
 # lead and the C3 speed ramp are prepended exactly like the analytic path.
+
 
 class _PeriodicSpline:
     """C2 periodic cubic spline through k points over a fixed phase period.
@@ -803,8 +865,7 @@ class _PeriodicSpline:
             A[i, (i - 1) % k] += 1.0
             A[i, i] += 4.0
             A[i, (i + 1) % k] += 1.0
-        rhs = 6.0 * (np.roll(y, 1, axis=0) - 2.0 * y
-                     + np.roll(y, -1, axis=0)) / (h * h)
+        rhs = 6.0 * (np.roll(y, 1, axis=0) - 2.0 * y + np.roll(y, -1, axis=0)) / (h * h)
         self.M = np.linalg.solve(A, rhs)
         self.y, self.h, self.period, self.k = y, h, period, k
 
@@ -814,9 +875,11 @@ class _PeriodicSpline:
         j = (i + 1) % self.k
         t = u - i * self.h
         h, y, M = self.h, self.y, self.M
-        return ((M[i] * (h - t) ** 3 + M[j] * t ** 3) / (6.0 * h)
-                + (y[i] / h - M[i] * h / 6.0) * (h - t)
-                + (y[j] / h - M[j] * h / 6.0) * t)
+        return (
+            (M[i] * (h - t) ** 3 + M[j] * t**3) / (6.0 * h)
+            + (y[i] / h - M[i] * h / 6.0) * (h - t)
+            + (y[j] / h - M[j] * h / 6.0) * t
+        )
 
 
 def spline_pose_fn(cfg, geom, way_eyes, way_aims=None, way_rolls=None):
@@ -829,8 +892,7 @@ def spline_pose_fn(cfg, geom, way_eyes, way_aims=None, way_rolls=None):
     period = _tau(cfg.total_s, cfg.lead_s)
     s_eye = _PeriodicSpline(way_eyes, period)
     s_aim = _PeriodicSpline(way_aims, period) if way_aims is not None else None
-    s_roll = (_PeriodicSpline(np.asarray(way_rolls, float), period)
-              if way_rolls is not None else None)
+    s_roll = _PeriodicSpline(np.asarray(way_rolls, float), period) if way_rolls is not None else None
 
     def fn(t):
         phase = _tau(t, cfg.lead_s) * cfg.stress
@@ -838,6 +900,7 @@ def spline_pose_fn(cfg, geom, way_eyes, way_aims=None, way_rolls=None):
         aim = s_aim(phase) if s_aim is not None else geom.center
         roll = float(s_roll(phase)) if s_roll is not None else 0.0
         return eye, _look_at_gl(eye, np.asarray(aim, float), roll)
+
     return fn
 
 
@@ -852,10 +915,12 @@ def random_waypoints(geom, n, seed):
     d = rng.uniform(geom.d_near, geom.d_far, n)
     az = np.radians(rng.uniform(-40.0, 40.0, n))
     el = np.radians(rng.uniform(-25.0, 25.0, n))
-    return (geom.center[None]
-            + geom.fwd[None] * (d * np.cos(el) * np.cos(az))[:, None]
-            + geom.right[None] * (d * np.cos(el) * np.sin(az))[:, None]
-            + geom.up[None] * (d * np.sin(el))[:, None])
+    return (
+        geom.center[None]
+        + geom.fwd[None] * (d * np.cos(el) * np.cos(az))[:, None]
+        + geom.right[None] * (d * np.cos(el) * np.sin(az))[:, None]
+        + geom.up[None] * (d * np.sin(el))[:, None]
+    )
 
 
 def _load_waypoints(path):
@@ -877,24 +942,22 @@ def _load_waypoints(path):
             q = np.asarray(d["q_xyzw_camd"], float)
         elif "q_xyzw" in d:
             R_cam_body = _quat_to_rot(BODY_Q_CAMD).T
-            q = np.array([_rot_to_quat(_quat_to_rot(qb) @ R_cam_body.T)
-                          for qb in np.asarray(d["q_xyzw"], float)])
+            q = np.array([_rot_to_quat(_quat_to_rot(qb) @ R_cam_body.T) for qb in np.asarray(d["q_xyzw"], float)])
         else:
             q = None
     else:
-        rows = (json.load(open(path)) if path.endswith(".json")
-                else np.loadtxt(path, delimiter=",", comments="#", ndmin=2))
+        rows = (
+            json.load(open(path)) if path.endswith(".json") else np.loadtxt(path, delimiter=",", comments="#", ndmin=2)
+        )
         arr = np.asarray(rows, float)
         if arr.ndim != 2 or arr.shape[1] not in (3, 7):
-            raise ValueError(f"{path}: rows must be xyz or xyz+quat, "
-                             f"got shape {arr.shape}")
+            raise ValueError(f"{path}: rows must be xyz or xyz+quat, " f"got shape {arr.shape}")
         p = arr[:, :3]
         q = arr[:, 3:7] if arr.shape[1] == 7 else None
     keep = np.ones(len(p), bool)
     keep[1:] = np.linalg.norm(np.diff(p, axis=0), axis=1) > 1e-9
     if not keep.all():
-        print(f"[vio] waypoints: dropped {int((~keep).sum())} consecutive "
-              f"duplicate positions of {len(p)}")
+        print(f"[vio] waypoints: dropped {int((~keep).sum())} consecutive " f"duplicate positions of {len(p)}")
     return p[keep], (q[keep] if q is not None else None)
 
 
@@ -912,13 +975,13 @@ def _pose_waypoint_channels(eyes, quats, geom):
         aims[i] = eye + fwd * d
         base = _look_at_gl(eye, aims[i], 0.0)
         R_gl = (R_wc @ F3).T
-        rolls[i] = math.atan2(float(R_gl[0] @ base[1]),
-                              float(R_gl[0] @ base[0]))
+        rolls[i] = math.atan2(float(R_gl[0] @ base[1]), float(R_gl[0] @ base[0]))
     return aims, np.unwrap(rolls)
 
 
 # ---------------------------------------------------------------------------
 # Headless dry-run / Rerun export (no GUI, no GPU)
+
 
 def _default_cloud():
     """Stand-in for the live scene: the stock single 4x7 board at 30 cm tag
@@ -955,23 +1018,22 @@ def export_rerun(path, cfg, geom, times, eyes, R_wc, metrics):
     check-failure frames, and scalar timelines (angular rate, per-frame px,
     ceiling) so scrubbing shows when the motion gets violent."""
     import rerun as rr
+
     rr.init("vio_stress", spawn=False)
     rr.save(path)
     n = len(eyes)
-    bound = metrics["series"]["px_formula"]      # (n-1,) design formula
+    bound = metrics["series"]["px_formula"]  # (n-1,) design formula
     measured = metrics["series"]["px_measured"]  # (n,) corner step into i
-    ang = metrics["series"]["ang_rate"]          # (n-1,) rad/s
+    ang = metrics["series"]["ang_rate"]  # (n-1,) rad/s
     ceil_px = cfg.trackable_px
 
     mn, mx = geom.cloud.min(0), geom.cloud.max(0)
-    rr.log("world/boards",
-           rr.Boxes3D(centers=[(mn + mx) / 2.0],
-                      half_sizes=[np.maximum((mx - mn) / 2.0, 0.02)],
-                      colors=[(80, 140, 255)]),
-           static=True)
-    rr.log("world/board_points",
-           rr.Points3D(geom.cloud, colors=[(80, 140, 255)], radii=0.02),
-           static=True)
+    rr.log(
+        "world/boards",
+        rr.Boxes3D(centers=[(mn + mx) / 2.0], half_sizes=[np.maximum((mx - mn) / 2.0, 0.02)], colors=[(80, 140, 255)]),
+        static=True,
+    )
+    rr.log("world/board_points", rr.Points3D(geom.cloud, colors=[(80, 140, 255)], radii=0.02), static=True)
 
     def frame_color(i):
         """Green -> red against the px ceiling; gray during the lead."""
@@ -982,25 +1044,25 @@ def export_rerun(path, cfg, geom, times, eyes, R_wc, metrics):
 
     segs = [np.stack([eyes[i - 1], eyes[i]]) for i in range(1, n)]
     cols = [frame_color(i) for i in range(1, n)]
-    rr.log("world/trajectory", rr.LineStrips3D(segs, colors=cols),
-           static=True)
+    rr.log("world/trajectory", rr.LineStrips3D(segs, colors=cols), static=True)
 
     # camD optical axis (R_wc column 2) every 5th pose, coloured with the
     # same ramp, so a violently sweeping aim reads red at a glance
     idx = range(0, n, 5)
-    rr.log("world/aim",
-           rr.Arrows3D(origins=[eyes[i] for i in idx],
-                       vectors=[R_wc[i][:, 2] * 0.3 for i in idx],
-                       colors=[frame_color(i) for i in idx]),
-           static=True)
+    rr.log(
+        "world/aim",
+        rr.Arrows3D(
+            origins=[eyes[i] for i in idx],
+            vectors=[R_wc[i][:, 2] * 0.3 for i in idx],
+            colors=[frame_color(i) for i in idx],
+        ),
+        static=True,
+    )
 
     ref_in = metrics["coverage"][metrics["ref_sock"]]["inside_frames"]
-    bad = [eyes[i] for i in range(1, n)
-           if max(bound[i - 1], measured[i]) > ceil_px or not ref_in[i]]
+    bad = [eyes[i] for i in range(1, n) if max(bound[i - 1], measured[i]) > ceil_px or not ref_in[i]]
     if bad:
-        rr.log("world/check_failures",
-               rr.Points3D(bad, colors=[(255, 40, 40)], radii=0.035),
-               static=True)
+        rr.log("world/check_failures", rr.Points3D(bad, colors=[(255, 40, 40)], radii=0.035), static=True)
 
     # full camD-optical orientation as an RGB axes gizmo on the timeline
     # entity, so scrubbing shows the rig turning in place, not just where
@@ -1010,56 +1072,64 @@ def export_rerun(path, cfg, geom, times, eyes, R_wc, metrics):
     for i in range(n):
         rr.set_time("frame", sequence=i)
         rr.set_time("t", duration=float(times[i]))
-        rr.log("world/eye",
-               rr.Points3D([eyes[i]], colors=[(255, 255, 255)], radii=0.03))
-        rr.log("world/rig",
-               rr.Transform3D(translation=eyes[i], mat3x3=R_wc[i]))
+        rr.log("world/eye", rr.Points3D([eyes[i]], colors=[(255, 255, 255)], radii=0.03))
+        rr.log("world/rig", rr.Transform3D(translation=eyes[i], mat3x3=R_wc[i]))
         rr.log("metrics/px_per_frame", rr.Scalars(float(measured[i])))
         rr.log("metrics/px_ceiling", rr.Scalars(ceil_px))
         if i < n - 1:
-            rr.log("metrics/angular_rate_deg_s",
-                   rr.Scalars(math.degrees(float(ang[i]))))
+            rr.log("metrics/angular_rate_deg_s", rr.Scalars(math.degrees(float(ang[i]))))
 
 
 def main(argv=None):
     import argparse
+
     ap = argparse.ArgumentParser(
         prog="vio_trajectory",
         description="Headless VIO trajectory stress tester (no GUI, no "
-                    "GPU). STRESS env scales motion intensity; see the "
-                    "module docstring.")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="build the path, run verify_path's checks, print "
-                         "a verdict table, write the truth npz even on "
-                         "failure")
-    ap.add_argument("--calib",
-                    default="calibration_files/DP180IP-30020104.json",
-                    help="device calibration JSON (default: the real "
-                         "Aug 17 unit, serial 30.02.0104)")
-    ap.add_argument("--cloud",
-                    help="board vertex file (N,3): .npy/.npz/.json/.csv; "
-                         "default: the stock 4x7 board at 30 cm pitch, "
-                         "origin-centred, normal +z")
-    ap.add_argument("--waypoints",
-                    help="waypoint file (.npz p [+ q_xyzw_camd/q_xyzw], "
-                         ".json or .csv rows of xyz or xyz+quat), fitted "
-                         "with the C2 periodic spline")
-    ap.add_argument("--random", type=int, metavar="N",
-                    help="N rough random waypoints in the boards' viewing "
-                         "volume, same C2 spline")
-    ap.add_argument("--seed", type=int, default=0,
-                    help="rng seed for --random (default 0)")
-    ap.add_argument("--alignment",
-                    help="scene lidar_alignment.json (overrides the "
-                         "SCENE_ALIGNMENT env). --cloud files are then "
-                         "read as scene units and converted to metres; "
-                         "waypoints and the built-in default board are "
-                         "designed quantities and stay metric")
-    ap.add_argument("--npz",
-                    help="truth output path (default: VIO_TRAJ_NPZ env or "
-                         "mcap_outputs/vio_truth.npz)")
-    ap.add_argument("--rerun", metavar="OUT.rrd",
-                    help="export a Rerun scene of the run")
+        "GPU). STRESS env scales motion intensity; see the "
+        "module docstring.",
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="build the path, run verify_path's checks, print "
+        "a verdict table, write the truth npz even on "
+        "failure",
+    )
+    ap.add_argument(
+        "--calib",
+        default="calibration_files/DP180IP-30020104.json",
+        help="device calibration JSON (default: the real " "Aug 17 unit, serial 30.02.0104)",
+    )
+    ap.add_argument(
+        "--cloud",
+        help="board vertex file (N,3): .npy/.npz/.json/.csv; "
+        "default: the stock 4x7 board at 30 cm pitch, "
+        "origin-centred, normal +z",
+    )
+    ap.add_argument(
+        "--waypoints",
+        help="waypoint file (.npz p [+ q_xyzw_camd/q_xyzw], "
+        ".json or .csv rows of xyz or xyz+quat), fitted "
+        "with the C2 periodic spline",
+    )
+    ap.add_argument(
+        "--random",
+        type=int,
+        metavar="N",
+        help="N rough random waypoints in the boards' viewing " "volume, same C2 spline",
+    )
+    ap.add_argument("--seed", type=int, default=0, help="rng seed for --random (default 0)")
+    ap.add_argument(
+        "--alignment",
+        help="scene lidar_alignment.json (overrides the "
+        "SCENE_ALIGNMENT env). --cloud files are then "
+        "read as scene units and converted to metres; "
+        "waypoints and the built-in default board are "
+        "designed quantities and stay metric",
+    )
+    ap.add_argument("--npz", help="truth output path (default: VIO_TRAJ_NPZ env or " "mcap_outputs/vio_truth.npz)")
+    ap.add_argument("--rerun", metavar="OUT.rrd", help="export a Rerun scene of the run")
     args = ap.parse_args(argv)
     if not args.dry_run and not args.rerun:
         ap.error("nothing to do: pass --dry-run and/or --rerun")
@@ -1071,17 +1141,16 @@ def main(argv=None):
         cfg.npz_path = args.npz
     if args.alignment:
         cfg.alignment_path = args.alignment
-    align = (scene_alignment.load(cfg.alignment_path)
-             if cfg.alignment_path else None)
+    align = scene_alignment.load(cfg.alignment_path) if cfg.alignment_path else None
     cloud = _load_cloud(args.cloud) if args.cloud else _default_cloud()
     if align is not None and args.cloud:
         cloud = cloud * align.scale
-        print(f"[vio] alignment {cfg.alignment_path}: --cloud converted "
-              f"from scene units at {align.scale:.4f} m/unit")
+        print(
+            f"[vio] alignment {cfg.alignment_path}: --cloud converted " f"from scene units at {align.scale:.4f} m/unit"
+        )
     rig, ref_sock = load_rig(args.calib)
     center = 0.5 * (cloud.min(0) + cloud.max(0))
-    geom = PathGeometry(cloud, center, np.array([0.0, 0.0, 1.0]),
-                        rig[ref_sock])
+    geom = PathGeometry(cloud, center, np.array([0.0, 0.0, 1.0]), rig[ref_sock])
 
     seed = None
     if args.waypoints:
@@ -1104,11 +1173,12 @@ def main(argv=None):
     metrics, checks = run_checks(cfg, geom, rig, ref_sock, times, eyes, R_wc)
 
     print(f"=== vio dry-run: {source}, STRESS={cfg.stress:g} ===")
-    print(f"calib {args.calib} (ref cam{'abcd'[ref_sock]}, "
-          f"{rig[ref_sock]['model']}), {len(times)} frames @ {cfg.fps:g} "
-          f"fps, {cfg.lead_s:g} s lead + {cfg.motion_s:g} s motion")
-    print(f"bands {geom.d_near:.2f}..{geom.d_far:.2f} m, aim budget "
-          f"({geom.bud_x:.0f}, {geom.bud_y:.0f}) deg")
+    print(
+        f"calib {args.calib} (ref cam{'abcd'[ref_sock]}, "
+        f"{rig[ref_sock]['model']}), {len(times)} frames @ {cfg.fps:g} "
+        f"fps, {cfg.lead_s:g} s lead + {cfg.motion_s:g} s motion"
+    )
+    print(f"bands {geom.d_near:.2f}..{geom.d_far:.2f} m, aim budget " f"({geom.bud_x:.0f}, {geom.bud_y:.0f}) deg")
     width = max(len(c[0]) for c in checks)
     n_fail = n_warn = 0
     for name, ok, msg, strict in checks:
@@ -1120,20 +1190,20 @@ def main(argv=None):
         tag = "PASS" if ok else ("FAIL" if strict else "WARN")
         print(f"  {name:<{width}}  {tag}" + ("" if ok else f"  {msg}"))
     peak = metrics["peak"]
-    print(f"headline: peak angular rate {math.degrees(peak['w']):.1f} "
-          f"deg/s, peak speed {peak['v']:.2f} m/s, peak per-frame px "
-          f"{max(peak['px_formula'], peak['px_measured']):.1f} "
-          f"(ceiling {cfg.trackable_px:g})")
-    quads = {f"cam{'abcd'[s]}": metrics["coverage"][s]["quad"].tolist()
-             for s in sorted(metrics["coverage"])}
+    print(
+        f"headline: peak angular rate {math.degrees(peak['w']):.1f} "
+        f"deg/s, peak speed {peak['v']:.2f} m/s, peak per-frame px "
+        f"{max(peak['px_formula'], peak['px_measured']):.1f} "
+        f"(ceiling {cfg.trackable_px:g})"
+    )
+    quads = {f"cam{'abcd'[s]}": metrics["coverage"][s]["quad"].tolist() for s in sorted(metrics["coverage"])}
     print(f"coverage quadrants: {quads}")
     verdict = "PASS" if n_fail == 0 else f"{n_fail} check(s) failed"
     if n_warn:
         verdict += f", {n_warn} warning(s)"
     print(f"verdict: {verdict}")
 
-    extra = dict(stress=cfg.stress, source=source, seed=seed,
-                 failed_checks=[c[0] for c in checks if not c[1]])
+    extra = dict(stress=cfg.stress, source=source, seed=seed, failed_checks=[c[0] for c in checks if not c[1]])
     if align is not None:
         extra["alignment"] = align.meta_dict()
     export_npz(cfg.npz_path, cfg, eyes, R_wc, extra_meta=extra)
@@ -1147,4 +1217,5 @@ def main(argv=None):
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

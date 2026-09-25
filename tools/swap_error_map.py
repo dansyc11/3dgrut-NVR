@@ -52,21 +52,20 @@ the kb4 block onto cam 0 reproduces the ds block to 0.007 deg / 0.11 mm, and
 reads the kb4 block (the only one with KB4 intrinsics for every camera) and
 rebases it onto cam 0 so the world is a camera frame, as in the DP180 path.
 """
+
 import argparse
 import json
 import os
 
 import numpy as np
 
-CAM_NAMES = ["CamA", "CamB", "CamC", "CamD"]   # rig index -> name (DP180IP)
+CAM_NAMES = ["CamA", "CamB", "CamC", "CamD"]  # rig index -> name (DP180IP)
 
 # dataviz reference palette: categorical slots 1-3 (validated all-pairs) and
 # the sequential blue ramp used as an ordinal series scale / heatmap.
-SERIES = {"total": "#2a78d6", "translation": "#eb6834",
-          "rot+intr": "#1baf7a"}
+SERIES = {"total": "#2a78d6", "translation": "#eb6834", "rot+intr": "#1baf7a"}
 BLUE_RAMP = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"]
-SEQ_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf",
-            "#184f95", "#0d366b"]
+SEQ_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e6e5e1"
 
 
@@ -81,15 +80,13 @@ class KB4:
         # Largest theta up to which d(theta) is increasing (bisected on a
         # fine grid); beyond it the model folds over and is not invertible.
         th = np.linspace(0.0, np.pi, 20001)
-        dd = (1 + 3 * self.k1 * th**2 + 5 * self.k2 * th**4
-              + 7 * self.k3 * th**6 + 9 * self.k4 * th**8)
+        dd = 1 + 3 * self.k1 * th**2 + 5 * self.k2 * th**4 + 7 * self.k3 * th**6 + 9 * self.k4 * th**8
         bad = np.nonzero(dd <= 0)[0]
         self.theta_max = float(th[bad[0] - 1]) if bad.size else float(np.pi)
 
     def d(self, theta):
         t2 = theta * theta
-        return theta * (1 + t2 * (self.k1 + t2 * (self.k2 + t2 * (
-            self.k3 + t2 * self.k4))))
+        return theta * (1 + t2 * (self.k1 + t2 * (self.k2 + t2 * (self.k3 + t2 * self.k4))))
 
     def project(self, X):
         """X: (N,3) camera-frame points -> (uv (N,2), valid (N,) bool)."""
@@ -103,8 +100,7 @@ class KB4:
         on_axis = rho == 0
         u = np.where(on_axis, self.cx, u)
         v = np.where(on_axis, self.cy, v)
-        valid = ((theta < self.theta_max) & (u >= 0) & (u < self.width)
-                 & (v >= 0) & (v < self.height))
+        valid = (theta < self.theta_max) & (u >= 0) & (u < self.width) & (v >= 0) & (v < self.height)
         return np.stack([u, v], axis=1), valid
 
 
@@ -112,11 +108,13 @@ def quat_to_R(qx, qy, qz, qw):
     q = np.array([qw, qx, qy, qz], dtype=np.float64)
     q /= np.linalg.norm(q)
     w, x, y, z = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-    ])
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ]
+    )
 
 
 def load_device(path):
@@ -128,7 +126,7 @@ def load_device(path):
         data = json.load(fh)
     cams, names = {}, {}
 
-    if "calibration_data" in data:              # NV180 format
+    if "calibration_data" in data:  # NV180 format
         wrap = data["calibration_data"]
         block = wrap["calibration_data_kb4"]
         for i, cname in enumerate(block["cam_names"]):
@@ -141,15 +139,13 @@ def load_device(path):
             model = None
             if k["camera_type"] == "kb4":
                 v = k["intrinsics"]
-                model = KB4(v["fx"], v["fy"], v["cx"], v["cy"],
-                            (v["k1"], v["k2"], v["k3"], v["k4"]), w, h)
+                model = KB4(v["fx"], v["fy"], v["cx"], v["cy"], (v["k1"], v["k2"], v["k3"], v["k4"]), w, h)
             cams[i] = (model, R, t, k["camera_type"].upper())
-        R0, t0 = cams[0][1], cams[0][2]         # rebase IMU -> cam 0 gauge
-        cams = {i: (m, R0.T @ R, R0.T @ (t - t0), ct)
-                for i, (m, R, t, ct) in cams.items()}
+        R0, t0 = cams[0][1], cams[0][2]  # rebase IMU -> cam 0 gauge
+        cams = {i: (m, R0.T @ R, R0.T @ (t - t0), ct) for i, (m, R, t, ct) in cams.items()}
         return wrap.get("product_id", block.get("serial_number", "?")), cams, names
 
-    for idx, c in data["cameraData"]:           # DP180 format
+    for idx, c in data["cameraData"]:  # DP180 format
         e = c["extrinsics"]
         rot = e.get("rotationMatrix") or []
         R = np.array(rot, dtype=np.float64) if len(rot) else np.eye(3)
@@ -158,11 +154,8 @@ def load_device(path):
         K = c["intrinsicMatrix"]
         model = None
         if c["cameraType"] == 1:
-            model = KB4(K[0][0], K[1][1], K[0][2], K[1][2],
-                        c["distortionCoeff"][0:4], c["width"], c["height"])
-        cams[int(idx)] = (model, R, t,
-                          {0: "DS", 1: "KB4"}.get(c["cameraType"],
-                                                  f"type{c['cameraType']}"))
+            model = KB4(K[0][0], K[1][1], K[0][2], K[1][2], c["distortionCoeff"][0:4], c["width"], c["height"])
+        cams[int(idx)] = (model, R, t, {0: "DS", 1: "KB4"}.get(c["cameraType"], f"type{c['cameraType']}"))
         names[int(idx)] = CAM_NAMES[int(idx)]
     return data.get("deviceName", "?"), cams, names
 
@@ -178,22 +171,19 @@ def find_mirror_pair(cams):
                 ma, mb = cams[a][0], cams[b][0]
                 if (ma.width, ma.height) != (mb.width, mb.height):
                     continue
-                ang = np.degrees(np.arccos(np.clip(
-                    cams[a][1][:, 2] @ cams[b][1][:, 2], -1, 1)))
+                ang = np.degrees(np.arccos(np.clip(cams[a][1][:, 2] @ cams[b][1][:, 2], -1, 1)))
                 if 40.0 <= ang <= 80.0:
                     pairs.append((a, b, ang))
     if len(pairs) == 1:
         return pairs[0]
-    print(f"  (mirror-pair rule matched {len(pairs)} pairs, "
-          f"falling back to rig indices 1,2)")
-    ang = np.degrees(np.arccos(np.clip(
-        cams[1][1][:, 2] @ cams[2][1][:, 2], -1, 1)))
+    print(f"  (mirror-pair rule matched {len(pairs)} pairs, " f"falling back to rig indices 1,2)")
+    ang = np.degrees(np.arccos(np.clip(cams[1][1][:, 2] @ cams[2][1][:, 2], -1, 1)))
     return 1, 2, ang
 
 
 def to_cam(R, t, Xw):
     """world -> cam_i for X_w = R X_i + t."""
-    return (Xw - t) @ R          # == R.T @ (Xw - t) row-wise
+    return (Xw - t) @ R  # == R.T @ (Xw - t) row-wise
 
 
 def direction_grid(step_deg, az_max=110.0, el_max=80.0):
@@ -205,8 +195,7 @@ def direction_grid(step_deg, az_max=110.0, el_max=80.0):
     el = np.arange(-el_max, el_max + 1e-9, step_deg)
     AZ, EL = np.meshgrid(az, el, indexing="xy")
     a, e = np.radians(AZ.ravel()), np.radians(EL.ravel())
-    dirs = np.stack([np.cos(e) * np.sin(a), -np.sin(e), np.cos(e) * np.cos(a)],
-                    axis=1)
+    dirs = np.stack([np.cos(e) * np.sin(a), -np.sin(e), np.cos(e) * np.cos(a)], axis=1)
     return dirs, AZ.ravel(), EL.ravel(), (len(el), len(az))
 
 
@@ -227,25 +216,36 @@ def swap_delta(camB, camC, dirs, dist, tB, tC):
 
 def stats(err, mask):
     e = err[mask]
-    return (float(np.median(e)), float(np.percentile(e, 95)),
-            float(e.min()), float(e.max()))
+    return (float(np.median(e)), float(np.percentile(e, 95)), float(e.min()), float(e.max()))
 
 
-def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
-                note, field_label="field angle from world +z [deg]"):
+def make_figure(
+    out, dists, rows, series, field, az, el, shape, maps, title, note, field_label="field angle from world +z [deg]"
+):
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
 
-    plt.rcParams.update({
-        "font.size": 9, "axes.edgecolor": GRID, "axes.labelcolor": INK2,
-        "xtick.color": INK2, "ytick.color": INK2, "axes.titlecolor": INK,
-        "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6,
-        "axes.spines.top": False, "axes.spines.right": False,
-        "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb",
-        "legend.frameon": False,
-    })
+    plt.rcParams.update(
+        {
+            "font.size": 9,
+            "axes.edgecolor": GRID,
+            "axes.labelcolor": INK2,
+            "xtick.color": INK2,
+            "ytick.color": INK2,
+            "axes.titlecolor": INK,
+            "axes.grid": True,
+            "grid.color": GRID,
+            "grid.linewidth": 0.6,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "figure.facecolor": "#fcfcfb",
+            "axes.facecolor": "#fcfcfb",
+            "legend.frameon": False,
+        }
+    )
     fig, axs = plt.subplots(2, 2, figsize=(11, 8.2))
     fig.suptitle(title, color=INK, fontsize=12, x=0.02, ha="left")
 
@@ -260,10 +260,10 @@ def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
     ax.set_yscale("log")
     ax.set_xlabel("distance from the world origin [m]")
     ax.set_ylabel("swap error [px]")
-    ax.set_title("Error vs distance (solid median, dotted p95)", loc="left",
-                 fontsize=10)
-    ax.legend([plt.Line2D([], [], color=c, lw=2) for c in series.values()],
-              [f"{k}" for k in series], loc="best", fontsize=8)
+    ax.set_title("Error vs distance (solid median, dotted p95)", loc="left", fontsize=10)
+    ax.legend(
+        [plt.Line2D([], [], color=c, lw=2) for c in series.values()], [f"{k}" for k in series], loc="best", fontsize=8
+    )
 
     # (b) total error vs field angle, one ordinal series per distance
     ax = axs[0, 1]
@@ -290,8 +290,7 @@ def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
     el_ok = el.reshape(shape)[seen]
     pad = 5.0
     for ax, (title, grid, unit) in zip(axs[1], maps):
-        im = ax.imshow(grid, origin="lower", cmap=cmap, aspect="equal",
-                       extent=[az.min(), az.max(), el.min(), el.max()])
+        im = ax.imshow(grid, origin="lower", cmap=cmap, aspect="equal", extent=[az.min(), az.max(), el.min(), el.max()])
         ax.set_xlim(az_ok.min() - pad, az_ok.max() + pad)
         ax.set_ylim(el_ok.min() - pad, el_ok.max() + pad)
         ax.grid(False)
@@ -308,21 +307,22 @@ def make_figure(out, dists, rows, series, field, az, el, shape, maps, title,
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("calib", nargs="?",
-                    default="calibration_files/DP180IP-30020104.json")
-    ap.add_argument("--distances", type=float, nargs="+",
-                    default=[1.0, 3.0, 10.0, 100.0, 1000.0])
-    ap.add_argument("--step-deg", type=float, default=1.0,
-                    help="direction grid step (default 1 deg)")
-    ap.add_argument("--equalize-to", choices=["mid", "camb", "camc"],
-                    default="mid",
-                    help="where both camera centres go for the "
-                         "rotation+intrinsics term (default midpoint)")
-    ap.add_argument("--same-pose", action="store_true",
-                    help="module swap: both cameras at CamC's pose, error = "
-                         "|pi_B - pi_C| from CamB's intrinsics on CamC's mount")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("calib", nargs="?", default="calibration_files/DP180IP-30020104.json")
+    ap.add_argument("--distances", type=float, nargs="+", default=[1.0, 3.0, 10.0, 100.0, 1000.0])
+    ap.add_argument("--step-deg", type=float, default=1.0, help="direction grid step (default 1 deg)")
+    ap.add_argument(
+        "--equalize-to",
+        choices=["mid", "camb", "camc"],
+        default="mid",
+        help="where both camera centres go for the " "rotation+intrinsics term (default midpoint)",
+    )
+    ap.add_argument(
+        "--same-pose",
+        action="store_true",
+        help="module swap: both cameras at CamC's pose, error = "
+        "|pi_B - pi_C| from CamB's intrinsics on CamC's mount",
+    )
     ap.add_argument("--out", default="swap_error_map.png")
     ap.add_argument("--no-plot", action="store_true")
     args = ap.parse_args()
@@ -332,39 +332,40 @@ def main():
     for i in sorted(cams):
         m, R, t, kind = cams[i]
         fwd = R[:, 2]
-        print(f"  {names[i]} idx {i} {kind:3s} centre {t * 100} cm  "
-              f"forward {fwd}  yaw {np.degrees(np.arctan2(fwd[0], fwd[2])):+.2f} deg"
-              + (f"  theta_max {np.degrees(m.theta_max):.1f} deg" if m else ""))
+        print(
+            f"  {names[i]} idx {i} {kind:3s} centre {t * 100} cm  "
+            f"forward {fwd}  yaw {np.degrees(np.arctan2(fwd[0], fwd[2])):+.2f} deg"
+            + (f"  theta_max {np.degrees(m.theta_max):.1f} deg" if m else "")
+        )
     iB, iC, pair_ang = find_mirror_pair(cams)
     nameB, nameC = names[iB], names[iC]
-    print(f"  mirrored pair: {nameB} <-> {nameC} "
-          f"(optical axes {pair_ang:.2f} deg apart)")
+    print(f"  mirrored pair: {nameB} <-> {nameC} " f"(optical axes {pair_ang:.2f} deg apart)")
     camB, camC = cams[iB], cams[iC]
     for name, cam in ((nameB, camB), (nameC, camC)):
         if cam[0] is None:
             raise SystemExit(f"{name} is not KB4 ({cam[3]})")
-        print(f"  {name} fx {cam[0].fx:.3f} fy {cam[0].fy:.3f} cx {cam[0].cx:.3f} "
-              f"cy {cam[0].cy:.3f} k {cam[0].k1:+.5f} {cam[0].k2:+.5f} "
-              f"{cam[0].k3:+.5f} {cam[0].k4:+.5f}  {cam[0].width}x{cam[0].height}")
+        print(
+            f"  {name} fx {cam[0].fx:.3f} fy {cam[0].fy:.3f} cx {cam[0].cx:.3f} "
+            f"cy {cam[0].cy:.3f} k {cam[0].k1:+.5f} {cam[0].k2:+.5f} "
+            f"{cam[0].k3:+.5f} {cam[0].k4:+.5f}  {cam[0].width}x{cam[0].height}"
+        )
     tB, tC = camB[2], camC[2]
     baseline = np.linalg.norm(tC - tB)
     rel = camB[1].T @ camC[1]
     ang_bc = np.degrees(np.arccos(np.clip((np.trace(rel) - 1) / 2, -1, 1)))
-    print(f"  baseline {nameB}-{nameC} {baseline * 100:.3f} cm, "
-          f"full relative rotation {ang_bc:.2f} deg")
+    print(f"  baseline {nameB}-{nameC} {baseline * 100:.3f} cm, " f"full relative rotation {ang_bc:.2f} deg")
 
     eq = {"mid": 0.5 * (tB + tC), "camb": tB, "camc": tC}[args.equalize_to]
-    eq_label = {"mid": f"the {nameB}-{nameC} midpoint",
-                "camb": f"{nameB}'s centre",
-                "camc": f"{nameC}'s centre"}[args.equalize_to]
+    eq_label = {"mid": f"the {nameB}-{nameC} midpoint", "camb": f"{nameB}'s centre", "camc": f"{nameC}'s centre"}[
+        args.equalize_to
+    ]
 
     dirs, az, el, shape = direction_grid(args.step_deg)
     field_angle = np.degrees(np.arccos(np.clip(dirs[:, 2], -1, 1)))
     dists = list(args.distances)
 
     if args.same_pose:
-        same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
-                       field_angle, dists)
+        same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape, field_angle, dists)
         return
 
     # One common mask: directions inside both images at EVERY distance, so
@@ -378,10 +379,12 @@ def main():
         masks[d] = m & m_eq
         common &= masks[d]
     n = int(common.sum())
-    print(f"\nshared field: {n} directions of {len(dirs)} "
-          f"({args.step_deg:g} deg grid), az {az[common].min():+.0f}..{az[common].max():+.0f} "
-          f"el {el[common].min():+.0f}..{el[common].max():+.0f} deg, "
-          f"field angle up to {field_angle[common].max():.1f} deg")
+    print(
+        f"\nshared field: {n} directions of {len(dirs)} "
+        f"({args.step_deg:g} deg grid), az {az[common].min():+.0f}..{az[common].max():+.0f} "
+        f"el {el[common].min():+.0f}..{el[common].max():+.0f} deg, "
+        f"field angle up to {field_angle[common].max():.1f} deg"
+    )
     for d in dists:
         extra = int((masks[d] & ~common).sum())
         if extra:
@@ -397,38 +400,46 @@ def main():
         e_tot = np.linalg.norm(dl, axis=1)
         e_eq = np.linalg.norm(dl_eq, axis=1)
         e_tr = np.linalg.norm(dl - dl_eq, axis=1)
-        rows[d] = {"total": stats(e_tot, common),
-                   "translation": stats(e_tr, common),
-                   "rot+intr": stats(e_eq, common)}
+        rows[d] = {"total": stats(e_tot, common), "translation": stats(e_tr, common), "rot+intr": stats(e_eq, common)}
         field[d] = (field_angle, e_tot, common)
         r = rows[d]
-        print(f"{d:9g} | {r['total'][0]:9.2f} {r['total'][1]:8.2f} | "
-              f"{r['translation'][0]:9.3f} {r['translation'][1]:8.3f} | "
-              f"{r['rot+intr'][0]:12.2f} {r['rot+intr'][1]:8.2f} | "
-              f"{r['translation'][0] * d:11.2f}")
+        print(
+            f"{d:9g} | {r['total'][0]:9.2f} {r['total'][1]:8.2f} | "
+            f"{r['translation'][0]:9.3f} {r['translation'][1]:8.3f} | "
+            f"{r['rot+intr'][0]:12.2f} {r['rot+intr'][1]:8.2f} | "
+            f"{r['translation'][0] * d:11.2f}"
+        )
 
     # Far asymptote: pure directions, no translation at all (X at infinity).
     dl_inf, m_inf = swap_delta(camB, camC, dirs, 1.0, np.zeros(3), np.zeros(3))
     e_inf = np.linalg.norm(dl_inf, axis=1)
     med, p95, lo, hi = stats(e_inf, common)
     far = dists[-1]
-    print(f"\nfar-distance asymptote (X at infinity, translation dropped): "
-          f"median {med:.3f} px, p95 {p95:.3f} px, min {lo:.3f}, max {hi:.3f}")
-    print(f"  at {far:g} m the total is median {rows[far]['total'][0]:.3f} / "
-          f"p95 {rows[far]['total'][1]:.3f} px, i.e. within "
-          f"{abs(rows[far]['total'][0] - med):.4f} / "
-          f"{abs(rows[far]['total'][1] - p95):.4f} px of the asymptote; the "
-          f"translation term there is median {rows[far]['translation'][0]:.4f} px")
+    print(
+        f"\nfar-distance asymptote (X at infinity, translation dropped): "
+        f"median {med:.3f} px, p95 {p95:.3f} px, min {lo:.3f}, max {hi:.3f}"
+    )
+    print(
+        f"  at {far:g} m the total is median {rows[far]['total'][0]:.3f} / "
+        f"p95 {rows[far]['total'][1]:.3f} px, i.e. within "
+        f"{abs(rows[far]['total'][0] - med):.4f} / "
+        f"{abs(rows[far]['total'][1] - p95):.4f} px of the asymptote; the "
+        f"translation term there is median {rows[far]['translation'][0]:.4f} px"
+    )
     # Where the asymptote lands: forward ray and the field-angle trend.
     fwd = np.argmin(field_angle + np.where(common, 0, 1e9))
-    print(f"  forward ray (az {az[fwd]:+.0f}, el {el[fwd]:+.0f}): "
-          f"|pi_C - pi_B| = {e_inf[fwd]:.2f} px, u_C - u_B = {dl_inf[fwd][0]:+.1f} px, "
-          f"v_C - v_B = {dl_inf[fwd][1]:+.1f} px")
+    print(
+        f"  forward ray (az {az[fwd]:+.0f}, el {el[fwd]:+.0f}): "
+        f"|pi_C - pi_B| = {e_inf[fwd]:.2f} px, u_C - u_B = {dl_inf[fwd][0]:+.1f} px, "
+        f"v_C - v_B = {dl_inf[fwd][1]:+.1f} px"
+    )
     for lim in (10, 20, 30, 40):
         sel = common & (field_angle <= lim)
         if sel.any():
-            print(f"  field angle <= {lim:2d} deg: asymptote median "
-                  f"{np.median(e_inf[sel]):8.2f} px, p95 {np.percentile(e_inf[sel], 95):8.2f}")
+            print(
+                f"  field angle <= {lim:2d} deg: asymptote median "
+                f"{np.median(e_inf[sel]):8.2f} px, p95 {np.percentile(e_inf[sel], 95):8.2f}"
+            )
 
     if args.no_plot:
         return
@@ -437,18 +448,28 @@ def main():
     grid_tr = np.full(len(dirs), np.nan)
     e_tr1 = np.linalg.norm(deltas[dists[0]][0] - deltas[dists[0]][1], axis=1)
     grid_tr[common] = e_tr1[common]
-    maps = [("Rotation+intrinsics term (asymptote, X at infinity)",
-             grid_far.reshape(shape), "px"),
-            (f"Translation term at {dists[0]:g} m", grid_tr.reshape(shape), "px")]
+    maps = [
+        ("Rotation+intrinsics term (asymptote, X at infinity)", grid_far.reshape(shape), "px"),
+        (f"Translation term at {dists[0]:g} m", grid_tr.reshape(shape), "px"),
+    ]
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    make_figure(args.out, dists, rows, SERIES, field, az, el, shape, maps,
-                f"{nameB} <-> {nameC} swap error  |pi_C(X) - pi_B(X)|",
-                f"translations equalized to {eq_label}; white = outside the "
-                f"field shared by {nameB} and {nameC} at all distances")
+    make_figure(
+        args.out,
+        dists,
+        rows,
+        SERIES,
+        field,
+        az,
+        el,
+        shape,
+        maps,
+        f"{nameB} <-> {nameC} swap error  |pi_C(X) - pi_B(X)|",
+        f"translations equalized to {eq_label}; white = outside the "
+        f"field shared by {nameB} and {nameC} at all distances",
+    )
 
 
-def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
-                   field_angle, dists):
+def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape, field_angle, dists):
     """Both cameras at the C-side pose: the error is the B module's
     intrinsics on the C mount, |pi_B(T_C^-1 X) - pi_C(T_C^-1 X)|,
     direction-only by construction (the two centres coincide), so it does
@@ -458,11 +479,13 @@ def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
     # field angle from the C mount's own optical axis, the natural coordinate
     field_angle = np.degrees(np.arccos(np.clip(dirs @ camC[1][:, 2], -1, 1)))
     print(f"\n--same-pose: both cameras at {nameC}'s pose, error = |pi_B - pi_C|")
-    print(f"  intrinsic deltas {nameB}-{nameC}: cx {kB.cx - kC.cx:+.3f} px, "
-          f"cy {kB.cy - kC.cy:+.3f} px, "
-          f"fx ratio {kB.fx / kC.fx:.5f}, fy ratio {kB.fy / kC.fy:.5f}, "
-          f"k1..k4 {kB.k1 - kC.k1:+.5f} {kB.k2 - kC.k2:+.5f} "
-          f"{kB.k3 - kC.k3:+.5f} {kB.k4 - kC.k4:+.5f}")
+    print(
+        f"  intrinsic deltas {nameB}-{nameC}: cx {kB.cx - kC.cx:+.3f} px, "
+        f"cy {kB.cy - kC.cy:+.3f} px, "
+        f"fx ratio {kB.fx / kC.fx:.5f}, fy ratio {kB.fy / kC.fy:.5f}, "
+        f"k1..k4 {kB.k1 - kC.k1:+.5f} {kB.k2 - kC.k2:+.5f} "
+        f"{kB.k3 - kC.k3:+.5f} {kB.k4 - kC.k4:+.5f}"
+    )
 
     deltas, masks = {}, {}
     common = np.ones(len(dirs), dtype=bool)
@@ -472,18 +495,22 @@ def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
         masks[d] = m
         common &= m
     n = int(common.sum())
-    print(f"shared field (both models valid from {nameC}'s mount): {n} directions "
-          f"of {len(dirs)} ({args.step_deg:g} deg grid), az {az[common].min():+.0f}.."
-          f"{az[common].max():+.0f} el {el[common].min():+.0f}..{el[common].max():+.0f} deg "
-          f"in the world frame, up to {field_angle[common].max():.1f} deg off {nameC}'s axis")
+    print(
+        f"shared field (both models valid from {nameC}'s mount): {n} directions "
+        f"of {len(dirs)} ({args.step_deg:g} deg grid), az {az[common].min():+.0f}.."
+        f"{az[common].max():+.0f} el {el[common].min():+.0f}..{el[common].max():+.0f} deg "
+        f"in the world frame, up to {field_angle[common].max():.1f} deg off {nameC}'s axis"
+    )
     for d in dists:
         extra = int((masks[d] & ~common).sum())
         if extra:
             print(f"  ({extra} more directions are jointly visible at {d:g} m only)")
 
     print(f"\nmodule-swap error |pi_B - pi_C| [px] on {nameC}'s mount")
-    hdr = (f"{'dist [m]':>9} | {'total med':>9} {'p95':>8} | "
-           f"{'const offset du':>15} {'dv':>8} {'|off|':>7} | {'residual med':>12} {'p95':>8}")
+    hdr = (
+        f"{'dist [m]':>9} | {'total med':>9} {'p95':>8} | "
+        f"{'const offset du':>15} {'dv':>8} {'|off|':>7} | {'residual med':>12} {'p95':>8}"
+    )
     print(hdr)
     print("-" * len(hdr))
     rows, field = {}, {}
@@ -493,43 +520,54 @@ def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
         e_tot = np.linalg.norm(dl, axis=1)
         e_res = np.linalg.norm(dl - off, axis=1)
         e_off = np.full(len(dl), np.linalg.norm(off))
-        rows[d] = {"intrinsics": stats(e_tot, common),
-                   "constant offset": stats(e_off, common),
-                   "offset removed": stats(e_res, common)}
+        rows[d] = {
+            "intrinsics": stats(e_tot, common),
+            "constant offset": stats(e_off, common),
+            "offset removed": stats(e_res, common),
+        }
         field[d] = (field_angle, e_tot, common)
         r = rows[d]
-        print(f"{d:9g} | {r['intrinsics'][0]:9.3f} {r['intrinsics'][1]:8.3f} | "
-              f"{off[0]:15.3f} {off[1]:8.3f} {np.linalg.norm(off):7.3f} | "
-              f"{r['offset removed'][0]:12.3f} {r['offset removed'][1]:8.3f}")
+        print(
+            f"{d:9g} | {r['intrinsics'][0]:9.3f} {r['intrinsics'][1]:8.3f} | "
+            f"{off[0]:15.3f} {off[1]:8.3f} {np.linalg.norm(off):7.3f} | "
+            f"{r['offset removed'][0]:12.3f} {r['offset removed'][1]:8.3f}"
+        )
 
     # Direction-only limit (X at infinity): the centres coincide anyway, so
     # this differs from the table only through the grid's parallax to CamC.
-    uvB, uvC, _ = pair_uv(camB, camC, dirs, 1.0, (camC[1], np.zeros(3)),
-                          (camC[1], np.zeros(3)))
+    uvB, uvC, _ = pair_uv(camB, camC, dirs, 1.0, (camC[1], np.zeros(3)), (camC[1], np.zeros(3)))
     dl_inf = uvB - uvC
     off_inf = dl_inf[common].mean(axis=0)
     e_inf = np.linalg.norm(dl_inf, axis=1)
     e_res_inf = np.linalg.norm(dl_inf - off_inf, axis=1)
     med, p95, lo, hi = stats(e_inf, common)
     rmed, rp95, rlo, rhi = stats(e_res_inf, common)
-    print(f"\nfar-distance asymptote (X at infinity): median {med:.3f} px, p95 {p95:.3f}, "
-          f"min {lo:.3f}, max {hi:.3f}")
-    print(f"  constant offset (mean over the field): du {off_inf[0]:+.3f} px, "
-          f"dv {off_inf[1]:+.3f} px, |offset| {np.linalg.norm(off_inf):.3f} px "
-          f"(principal-point delta alone: {kB.cx - kC.cx:+.3f}, {kB.cy - kC.cy:+.3f})")
-    print(f"  after removing the offset: median {rmed:.3f} px, p95 {rp95:.3f}, "
-          f"min {rlo:.3f}, max {rhi:.3f}  (focal + distortion difference)")
-    axis = np.argmin(np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1)
-                     + np.where(common, 0, 1e9))
-    print(f"  on {nameC}'s optical axis (az {az[axis]:+.0f}, el {el[axis]:+.0f}): "
-          f"du {dl_inf[axis][0]:+.3f} dv {dl_inf[axis][1]:+.3f} px")
+    print(
+        f"\nfar-distance asymptote (X at infinity): median {med:.3f} px, p95 {p95:.3f}, " f"min {lo:.3f}, max {hi:.3f}"
+    )
+    print(
+        f"  constant offset (mean over the field): du {off_inf[0]:+.3f} px, "
+        f"dv {off_inf[1]:+.3f} px, |offset| {np.linalg.norm(off_inf):.3f} px "
+        f"(principal-point delta alone: {kB.cx - kC.cx:+.3f}, {kB.cy - kC.cy:+.3f})"
+    )
+    print(
+        f"  after removing the offset: median {rmed:.3f} px, p95 {rp95:.3f}, "
+        f"min {rlo:.3f}, max {rhi:.3f}  (focal + distortion difference)"
+    )
+    axis = np.argmin(np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1) + np.where(common, 0, 1e9))
+    print(
+        f"  on {nameC}'s optical axis (az {az[axis]:+.0f}, el {el[axis]:+.0f}): "
+        f"du {dl_inf[axis][0]:+.3f} dv {dl_inf[axis][1]:+.3f} px"
+    )
     rad = np.linalg.norm(uvC - [kC.cx, kC.cy], axis=1)
     for lim in (100, 200, 300, 400, 500, 600):
         sel = common & (rad <= lim)
         if sel.any():
-            print(f"  within {lim:3d} px of {nameC}'s principal point: "
-                  f"median {np.median(e_inf[sel]):7.3f} px, p95 {np.percentile(e_inf[sel], 95):7.3f}, "
-                  f"residual median {np.median(e_res_inf[sel]):7.3f}")
+            print(
+                f"  within {lim:3d} px of {nameC}'s principal point: "
+                f"median {np.median(e_inf[sel]):7.3f} px, p95 {np.percentile(e_inf[sel], 95):7.3f}, "
+                f"residual median {np.median(e_res_inf[sel]):7.3f}"
+            )
 
     if args.no_plot:
         return
@@ -537,18 +575,30 @@ def same_pose_mode(args, camB, camC, nameB, nameC, dirs, az, el, shape,
     grid_tot[common] = e_inf[common]
     grid_res = np.full(len(dirs), np.nan)
     grid_res[common] = e_res_inf[common]
-    maps = [("Module-swap error |pi_B - pi_C| (X at infinity)",
-             grid_tot.reshape(shape), "px"),
-            ("After removing the constant offset", grid_res.reshape(shape), "px")]
-    series = {"intrinsics": SERIES["total"],
-              "constant offset": SERIES["translation"],
-              "offset removed": SERIES["rot+intr"]}
+    maps = [
+        ("Module-swap error |pi_B - pi_C| (X at infinity)", grid_tot.reshape(shape), "px"),
+        ("After removing the constant offset", grid_res.reshape(shape), "px"),
+    ]
+    series = {
+        "intrinsics": SERIES["total"],
+        "constant offset": SERIES["translation"],
+        "offset removed": SERIES["rot+intr"],
+    }
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    make_figure(args.out, dists, rows, series, field, az, el, shape, maps,
-                f"{nameB} module on {nameC}'s mount  |pi_B(X) - pi_C(X)|",
-                f"both cameras at {nameC}'s pose; white = outside the field "
-                "both models see from that mount",
-                field_label=f"field angle from {nameC}'s optical axis [deg]")
+    make_figure(
+        args.out,
+        dists,
+        rows,
+        series,
+        field,
+        az,
+        el,
+        shape,
+        maps,
+        f"{nameB} module on {nameC}'s mount  |pi_B(X) - pi_C(X)|",
+        f"both cameras at {nameC}'s pose; white = outside the field " "both models see from that mount",
+        field_label=f"field angle from {nameC}'s optical axis [deg]",
+    )
 
 
 if __name__ == "__main__":

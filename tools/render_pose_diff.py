@@ -24,6 +24,7 @@ walls) so trainer eval never sees them; the ray tracer composites them at
 the ray's closest approach -> fog. Expect: playground_* soup, pruned_*
 coherent, trainer_repro ~= runs render.
 """
+
 import argparse
 import os
 import sys
@@ -44,6 +45,7 @@ def masked_psnr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor) -> float:
 
 def save_png(path: Path, img: torch.Tensor) -> None:
     from PIL import Image
+
     arr = (img.clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
     Image.fromarray(arr).save(path)
 
@@ -51,7 +53,9 @@ def save_png(path: Path, img: torch.Tensor) -> None:
 def load_playground_model(ply_path: str, config_name: str):
     """Mirrors Engine3DGRUT.load_3dgrt_object's .ply branch (engine.py:1119-1145)."""
     from hydra import compose, initialize_config_dir
+
     from threedgrut.model.model import MixtureOfGaussians
+
     with initialize_config_dir(config_dir=str(REPO / "configs"), version_base=None):
         conf = compose(config_name=config_name)
     model = MixtureOfGaussians(conf)
@@ -62,6 +66,7 @@ def load_playground_model(ply_path: str, config_name: str):
 
 def write_pruned_ply(src: str, dst: str, smax_thr: float, opa_thr: float) -> int:
     from plyfile import PlyData, PlyElement
+
     ply = PlyData.read(src)
     v = ply.elements[0]
     smax = np.exp(np.stack([np.asarray(v[f"scale_{i}"]) for i in range(3)], 1)).max(1)
@@ -75,9 +80,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run_dir", required=True, help="training run folder, runs/<experiment>/<run>")
     datasets = os.environ.get("VILOTA_DATASETS")
-    ap.add_argument("--dataset", default=datasets and os.path.join(datasets, "meetingroom"),
-                    required=datasets is None,
-                    help="FIORD meetingroom dataset (default $VILOTA_DATASETS/meetingroom)")
+    ap.add_argument(
+        "--dataset",
+        default=datasets and os.path.join(datasets, "meetingroom"),
+        required=datasets is None,
+        help="FIORD meetingroom dataset (default $VILOTA_DATASETS/meetingroom)",
+    )
     ap.add_argument("--frame", type=int, default=4, help="val-split index; renders/<frame:05d>.png")
     ap.add_argument("--config", default="apps/colmap_3dgrt.yaml", help="playground default_gs_config")
     ap.add_argument("--prune_smax", type=float, default=5.0)
@@ -92,20 +100,22 @@ def main():
 
     # --- exact eval rays / pose / GT / mask (identical to trainer eval batch) ---
     from threedgrut.datasets.dataset_colmap import ColmapDataset
+
     ds = ColmapDataset(args.dataset, device="cuda", split="val", downsample_factor=4)
     print(f"frame {tag} = {os.path.basename(ds.image_paths[args.frame])}")
     item = ds[args.frame]
     batch = torch.utils.data.default_collate([item])
     gpu_batch = ds.get_gpu_batch_with_intrinsics(batch)
     H, W = gpu_batch.rgb_gt.shape[1:3]
-    gt = gpu_batch.rgb_gt[0]                       # (H,W,3)
+    gt = gpu_batch.rgb_gt[0]  # (H,W,3)
     mask = gpu_batch.mask[0] if gpu_batch.mask is not None else torch.ones(H, W, 1, device="cuda")
-    pose = gpu_batch.T_to_world                    # (1,4,4) C2W
+    pose = gpu_batch.T_to_world  # (1,4,4) C2W
     print(f"seat C = {pose[0, :3, 3].tolist()}")
     save_png(out_dir / f"gt_{tag}.png", gt)
 
     # 90-deg pinhole rays from the same seat (f = W/2), COLMAP camera convention
     from threedgrut.datasets.utils import pinhole_camera_rays
+
     u = np.tile(np.arange(W), H)
     v = np.arange(H).repeat(W)
     po, pd = pinhole_camera_rays(u, v, W / 2, W / 2, W, H, None)
@@ -116,6 +126,7 @@ def main():
     trainer_img = None
     if trainer_png.exists():
         from PIL import Image
+
         trainer_img = torch.tensor(
             np.asarray(Image.open(trainer_png))[..., :3] / 255.0, dtype=torch.float32, device="cuda"
         )
@@ -149,7 +160,9 @@ def main():
 
     # --- D: trainer-conf 3DGUT reproduction (harness check vs renders/<tag>.png) ---
     from omegaconf import OmegaConf
+
     from threedgrut.model.model import MixtureOfGaussians
+
     conf_t = OmegaConf.load(run_dir / "parsed.yaml")
     mt = MixtureOfGaussians(conf_t)
     mt.init_from_ply(ply_path, init_model=False)

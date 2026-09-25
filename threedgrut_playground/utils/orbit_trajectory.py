@@ -16,8 +16,10 @@ Aim grids are per camera type. The KB4 cameras are 1280x800 with about a 58
 degree half field, so wide aims would only point them at nothing. The Double
 Sphere camera keeps the wide rectangular grid.
 """
+
 import math
 import os
+
 import numpy as np
 import polyscope as ps
 
@@ -37,10 +39,8 @@ AZIMUTH_SPAN = 90.0
 DISTANCE_FACTORS = [0.5, 0.9]
 
 # Aim grids, degrees off the optical axis. Yaw is horizontal.
-AIM_KB4 = ([-45.0, -22.0, 0.0, 22.0, 45.0],
-           [-28.0, 0.0, 28.0])
-AIM_DS = ([-78.0, -58.0, -38.0, -19.0, 0.0, 19.0, 38.0, 58.0, 78.0],
-          [-49.0, -33.0, -16.0, 0.0, 16.0, 33.0, 49.0])
+AIM_KB4 = ([-45.0, -22.0, 0.0, 22.0, 45.0], [-28.0, 0.0, 28.0])
+AIM_DS = ([-78.0, -58.0, -38.0, -19.0, 0.0, 19.0, 38.0, 58.0, 78.0], [-49.0, -33.0, -16.0, 0.0, 16.0, 33.0, 49.0])
 MAX_AIM_ANGLE = 95.0
 
 # The scene up axis, from the Up setting in the Render widget (neg_y_up).
@@ -65,13 +65,13 @@ def board_frame(gui, name_hint="Quad"):
     changes there.
     """
     import os
+
     objs = gui.primitives.objects
 
     def match(hint):
         return next((k for k in objs if hint.lower() in k.lower()), None)
 
-    hints = [name_hint, os.environ.get("ORBIT_TARGET") or "",
-             "grid_off14", "aprilgrid"]
+    hints = [name_hint, os.environ.get("ORBIT_TARGET") or "", "grid_off14", "aprilgrid"]
     key = None
     for hint in hints:
         if hint:
@@ -81,8 +81,7 @@ def board_frame(gui, name_hint="Quad"):
                     print(f"[orbit] no '{name_hint}', aiming at '{key}'")
                 break
     if key is None:
-        raise ValueError(f"No primitive matching any of {hints}. "
-                         f"Have: {list(objs)}")
+        raise ValueError(f"No primitive matching any of {hints}. " f"Have: {list(objs)}")
 
     prim = objs[key].apply_transform()
     verts = prim.vertices.detach().cpu().numpy()
@@ -112,6 +111,7 @@ def combined_board_frame(gui, name_hint="Quad"):
     Falls back to board_frame when nothing matches.
     """
     from threedgrut_playground.utils.boards import BOARD_NAMES
+
     objs = gui.primitives.objects
     wanted = [n.lower() for n in BOARD_NAMES if n != "vilota_logo"]
     wanted.append(name_hint.lower())
@@ -125,14 +125,12 @@ def combined_board_frame(gui, name_hint="Quad"):
         prim = objs[k].apply_transform()
         all_verts.append(prim.vertices.detach().cpu().numpy())
         if prim.vertex_normals is not None:
-            normals.append(
-                prim.vertex_normals.detach().cpu().numpy().mean(axis=0))
+            normals.append(prim.vertex_normals.detach().cpu().numpy().mean(axis=0))
     pts = np.concatenate(all_verts, axis=0)
     mn, mx = pts.min(axis=0), pts.max(axis=0)
     center = (mn + mx) / 2.0
     width = float((mx - mn).max())
-    corners = np.array([[x, y, z] for x in (mn[0], mx[0])
-                        for y in (mn[1], mx[1]) for z in (mn[2], mx[2])])
+    corners = np.array([[x, y, z] for x in (mn[0], mx[0]) for y in (mn[1], mx[1]) for z in (mn[2], mx[2])])
     normal = np.sum(normals, axis=0) if normals else np.array([0.0, 0.0, 1.0])
     n = np.linalg.norm(normal)
     normal = normal / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
@@ -169,8 +167,7 @@ def _ring_fits(center, normal, corners, r, tx, ty):
         fwd = rel @ view
         if (fwd <= 1e-6).any():
             return False
-        if (np.abs(rel @ right) > fwd * tx).any() \
-                or (np.abs(rel @ up) > fwd * ty).any():
+        if (np.abs(rel @ right) > fwd * tx).any() or (np.abs(rel @ up) > fwd * ty).any():
             return False
     return True
 
@@ -237,22 +234,25 @@ def eye_positions(center, normal, width, min_radius=None):
         d = float(dist_env)
         mean_f = sum(DISTANCE_FACTORS) / len(DISTANCE_FACTORS)
         factors = [f * d / (width * mean_f) for f in DISTANCE_FACTORS]
-        print(f"[orbit] ORBIT_DIST {d:.2f} m -> eye radii "
-              f"{[round(width * f, 2) for f in factors]} m")
+        print(f"[orbit] ORBIT_DIST {d:.2f} m -> eye radii " f"{[round(width * f, 2) for f in factors]} m")
     radii = [width * f for f in factors]
     if min_radius is not None:
         if dist_env:
             if min(radii) < min_radius:
-                print(f"[orbit] WARNING ORBIT_DIST rings "
-                      f"{[round(r, 2) for r in radii]} m sit inside the "
-                      f"{min_radius:.2f} m all-boards fit radius; outer "
-                      "boards will leave the KB4 field of view")
+                print(
+                    f"[orbit] WARNING ORBIT_DIST rings "
+                    f"{[round(r, 2) for r in radii]} m sit inside the "
+                    f"{min_radius:.2f} m all-boards fit radius; outer "
+                    "boards will leave the KB4 field of view"
+                )
         else:
             pushed = [max(r, min_radius) for r in radii]
             if pushed != radii:
-                print(f"[orbit] rings {[round(r, 2) for r in radii]} m -> "
-                      f"{[round(r, 2) for r in pushed]} m so every board "
-                      "fits the KB4 view from every eye")
+                print(
+                    f"[orbit] rings {[round(r, 2) for r in radii]} m -> "
+                    f"{[round(r, 2) for r in pushed]} m so every board "
+                    "fits the KB4 view from every eye"
+                )
             radii = pushed
     eyes = _eyes_for_radii(center, normal, radii)
 
@@ -266,10 +266,10 @@ def eye_positions(center, normal, width, min_radius=None):
         home = arr.mean(axis=0)
         clamped = np.clip(arr, home - r, home + r)
         moved = np.linalg.norm(clamped - arr, axis=1)
-        print(f"[orbit] ARM_REACH {r:.2f} m box at "
-              f"({home[0]:+.2f}, {home[1]:+.2f}, {home[2]:+.2f})")
-        print(f"[orbit] {int((moved > 1e-6).sum())} of {len(arr)} viewpoints "
-              f"pulled in, max move {moved.max():.2f} m")
+        print(f"[orbit] ARM_REACH {r:.2f} m box at " f"({home[0]:+.2f}, {home[1]:+.2f}, {home[2]:+.2f})")
+        print(
+            f"[orbit] {int((moved > 1e-6).sum())} of {len(arr)} viewpoints " f"pulled in, max move {moved.max():.2f} m"
+        )
         eyes = [row for row in clamped]
     return eyes
 
@@ -282,11 +282,7 @@ def make_pose(center, eye, yaw, pitch):
         return None
     view = view / dist
     cam_right, cam_up = frame_from(view)
-    aim = (
-        center
-        + cam_right * (dist * math.tan(math.radians(yaw)))
-        + cam_up * (dist * math.tan(math.radians(pitch)))
-    )
+    aim = center + cam_right * (dist * math.tan(math.radians(yaw))) + cam_up * (dist * math.tan(math.radians(pitch)))
     look = aim - eye
     n = np.linalg.norm(look)
     if n < 1e-6:
@@ -296,8 +292,7 @@ def make_pose(center, eye, yaw, pitch):
     return aim
 
 
-def build_orbit_trajectory(gui, cam_index=None, name_hint="Quad", flip=False,
-                           vio=None):
+def build_orbit_trajectory(gui, cam_index=None, name_hint="Quad", flip=False, vio=None):
     """Fill the trajectory, serving every camera on the rig in turn."""
     # vio=True builds the smooth VIO path (vio_trajectory.py) instead of the
     # aim-sweep orbit. The GUI's Trajectory-type combo passes it explicitly;
@@ -306,8 +301,8 @@ def build_orbit_trajectory(gui, cam_index=None, name_hint="Quad", flip=False,
     if vio is None:
         vio = bool(os.environ.get("VIO_TRAJ"))
     if vio:
-        from threedgrut_playground.utils.vio_trajectory import \
-            build_vio_trajectory
+        from threedgrut_playground.utils.vio_trajectory import build_vio_trajectory
+
         return build_vio_trajectory(gui, name_hint=name_hint, flip=flip)
     # ORBIT_TARGET keeps the old single-board orbit. The default frames the
     # combined bounding box of every board in the scene.
@@ -315,8 +310,7 @@ def build_orbit_trajectory(gui, cam_index=None, name_hint="Quad", flip=False,
     if os.environ.get("ORBIT_TARGET"):
         center, normal, width, key = board_frame(gui, name_hint)
     else:
-        center, normal, width, key, corners, n_boards = \
-            combined_board_frame(gui, name_hint)
+        center, normal, width, key, corners, n_boards = combined_board_frame(gui, name_hint)
     # The centre comes from the DRAWN vertices (apply_transform): the quad's
     # local vertices sit at z=2.5, so a board spawned at tz is drawn at
     # tz + sz*2.5. Do not replace it with the transform.
@@ -324,16 +318,13 @@ def build_orbit_trajectory(gui, cam_index=None, name_hint="Quad", flip=False,
     # -z and the tracer does not cull back faces, so the tags render
     # mirror-reversed and tag16h5 cannot decode them. Leave it unset.
     if flip or os.environ.get("ORBIT_FLIP"):
-        print("[orbit] WARNING ORBIT_FLIP set: camera will be behind the "
-              "boards and tags will be mirrored")
+        print("[orbit] WARNING ORBIT_FLIP set: camera will be behind the " "boards and tags will be mirrored")
         normal = -normal
 
     min_radius = None
     if corners is not None and n_boards > 1:
-        min_radius = min_fit_radius(center, normal, corners,
-                                    start=width * min(DISTANCE_FACTORS))
-        print(f"[orbit] framing {n_boards} boards, fit radius "
-              f"{min_radius:.2f} m")
+        min_radius = min_fit_radius(center, normal, corners, start=width * min(DISTANCE_FACTORS))
+        print(f"[orbit] framing {n_boards} boards, fit radius " f"{min_radius:.2f} m")
 
     nvr = gui.novel_view_renderer
     nvr.create_new_trajectory()
@@ -350,15 +341,19 @@ def build_orbit_trajectory(gui, cam_index=None, name_hint="Quad", flip=False,
     # grid (45/28 deg) is narrower than the DS grid (78/49 deg), so the two
     # camera types need different values. Falls back to AIM_SCALE.
     aim_scale_kb4 = float(os.environ.get("AIM_SCALE_KB4", aim_scale))
+
     def scaled(grid, s):
         yaws, pitches = grid
         return [y * s for y in yaws], [pt * s for pt in pitches]
+
     if aim_scale != 1.0 or aim_scale_kb4 != 1.0:
-        print(f"[orbit] AIM_SCALE {aim_scale:.2f}, AIM_SCALE_KB4 {aim_scale_kb4:.2f}: "
-              f"DS yaw/pitch max {max(abs(a) for a in AIM_DS[0]) * aim_scale:.0f}/"
-              f"{max(abs(a) for a in AIM_DS[1]) * aim_scale:.0f} deg, "
-              f"KB4 yaw/pitch max {max(abs(a) for a in AIM_KB4[0]) * aim_scale_kb4:.0f}/"
-              f"{max(abs(a) for a in AIM_KB4[1]) * aim_scale_kb4:.0f} deg")
+        print(
+            f"[orbit] AIM_SCALE {aim_scale:.2f}, AIM_SCALE_KB4 {aim_scale_kb4:.2f}: "
+            f"DS yaw/pitch max {max(abs(a) for a in AIM_DS[0]) * aim_scale:.0f}/"
+            f"{max(abs(a) for a in AIM_DS[1]) * aim_scale:.0f} deg, "
+            f"KB4 yaw/pitch max {max(abs(a) for a in AIM_KB4[0]) * aim_scale_kb4:.0f}/"
+            f"{max(abs(a) for a in AIM_KB4[1]) * aim_scale_kb4:.0f} deg"
+        )
     plan = [(c, aim_angles(*scaled(AIM_KB4, aim_scale_kb4))) for c in KB4_CAMS]
     plan += [(c, aim_angles(*scaled(AIM_DS, aim_scale))) for c in DS_CAMS]
 

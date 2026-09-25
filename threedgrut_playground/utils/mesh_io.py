@@ -233,6 +233,7 @@ def create_quad_mesh(device):
     )
     return mesh
 
+
 def create_cube_mesh(device):
     """Creates a procedurally generated cube mesh with proper UV mapping."""
     MS = 1.0  # half side length
@@ -252,9 +253,7 @@ def create_cube_mesh(device):
         # right (+X)
         [[MS, -MS, -MS], [MS, MS, -MS], [MS, MS, MS], [MS, -MS, MS]],
     ]
-    face_uvs = [
-        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] for _ in range(6)
-    ]
+    face_uvs = [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] for _ in range(6)]
 
     vertices = []
     uvs = []
@@ -272,10 +271,5 @@ def create_cube_mesh(device):
     vertex_uvs = torch.tensor(uvs, dtype=torch.float32)
     face_uvs = vertex_uvs[faces].contiguous()  # (F, 3, 2)
 
-    mesh = create_procedural_mesh(
-        vertices=vertices,
-        faces=faces,
-        face_uvs=face_uvs,
-        device=device
-    )
+    mesh = create_procedural_mesh(vertices=vertices, faces=faces, face_uvs=face_uvs, device=device)
     return mesh

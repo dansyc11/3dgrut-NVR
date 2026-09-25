@@ -1,36 +1,33 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 import sys
 import time
 
-import argparse
+# sys.path.insert(0, '/usr/lib/python3/dist-packages')
+import ecal.core.core as ecal_core
 import numpy as np
 
-#sys.path.insert(0, '/usr/lib/python3/dist-packages')
-import ecal.core.core as ecal_core
-
-sys.path.append('/opt/vilota/bin')
-sys.path.append('/opt/vilota/python')
+sys.path.append("/opt/vilota/bin")
+sys.path.append("/opt/vilota/python")
 import os
 import sys
 import time
 
 import capnp
-import numpy as np
 import cv2
+import numpy as np
 
-
-sys.path.append('/opt/vilota/bin')
-sys.path.append('/opt/vilota/python')
-
+sys.path.append("/opt/vilota/bin")
+sys.path.append("/opt/vilota/python")
 
 
 import ecal.core.core as ecal_core
 from capnp_subscriber import CapnpSubscriber
 
 # pycapnp version >= 2.0
-sys.path.append('/opt/vilota/messages')
+sys.path.append("/opt/vilota/messages")
 capnp.add_import_hook()
 
 import image_capnp as eCALImage
@@ -60,7 +57,8 @@ def callback(type, topic_name, msg, ts):
     with eCALImage.Image.from_bytes(msg) as imageMsg:
         print(f"SN = {imageMsg.header.frameId}")
         print(
-            f"seq = {imageMsg.header.seq}, stamp = {imageMsg.header.stampMonotonic}, with {len(msg)} bytes, encoding = {imageMsg.encoding}")
+            f"seq = {imageMsg.header.seq}, stamp = {imageMsg.header.stampMonotonic}, with {len(msg)} bytes, encoding = {imageMsg.encoding}"
+        )
         # print(f"latency device = {imageMsg.header.latencyDevice / 1e6} ms")
         # print(f"latency host = {imageMsg.header.latencyHost / 1e6} ms")
         print(f"width = {imageMsg.width}, height = {imageMsg.height}, mipmap = {imageMsg.mipMapLevels}")
@@ -70,7 +68,7 @@ def callback(type, topic_name, msg, ts):
         print(f"instant w = {imageMsg.motionMeta.instantaneousAngularVelocity}")
         print(f"average w = {imageMsg.motionMeta.averageAngularVelocity}")
 
-        if (imageMsg.encoding == "mono8"):
+        if imageMsg.encoding == "mono8":
 
             mat = np.frombuffer(imageMsg.data, dtype=np.uint8)
             mat = mat.reshape((imageMsg.height, imageMsg.width, 1))
@@ -81,7 +79,7 @@ def callback(type, topic_name, msg, ts):
 
             # cv2.imshow("mono8", mat)
             # cv2.waitKey(3)
-        elif (imageMsg.encoding == "yuv420"):
+        elif imageMsg.encoding == "yuv420":
             mat = np.frombuffer(imageMsg.data, dtype=np.uint8)
             mat = mat.reshape((imageMsg.height * 3 // 2, imageMsg.width, 1))
 
@@ -90,11 +88,11 @@ def callback(type, topic_name, msg, ts):
             imshow_map[topic_name + " yuv420"] = mat
             # cv2.imshow("yuv420", mat)
             # cv2.waitKey(3)
-        elif (imageMsg.encoding == "bgr8"):
+        elif imageMsg.encoding == "bgr8":
             mat = np.frombuffer(imageMsg.data, dtype=np.uint8)
             mat = mat.reshape((imageMsg.height, imageMsg.width, 3))
             imshow_map[topic_name + " bgr8"] = mat
-        elif (imageMsg.encoding == "jpeg"):
+        elif imageMsg.encoding == "jpeg":
             mat_jpeg = np.frombuffer(imageMsg.data, dtype=np.uint8)
             mat = cv2.imdecode(mat_jpeg, cv2.IMREAD_GRAYSCALE)
             imshow_map[topic_name + " jpeg"] = mat
@@ -119,7 +117,7 @@ def main():
     # create subscriber and connect callback
 
     n = len(sys.argv)
-    topic_string=""
+    topic_string = ""
     if n == 1:
         topics = ["S0/cama"]
     elif n >= 2:
@@ -129,10 +127,10 @@ def main():
             print(f"topic {i} = {topics[-1]}")
     else:
         raise RuntimeError("Need to pass in exactly one parameter for topic")
-    
+
     for topic in topics:
         topic_string += topic + ","
-    
+
     subs = []
     for topic in topics:
         print(f"Streaming topic {topic}")
@@ -146,10 +144,10 @@ def main():
     while ecal_core.ok():
         im_maps = []
 
-        scale_percent = 100 #int(sys.argv[1])  # percent of original size
+        scale_percent = 100  # int(sys.argv[1])  # percent of original size
         width = int(1280 * scale_percent / 100)  # im.shape[1]
         height = int(800 * scale_percent / 100)  # im.shape[0]
-        dim = (width, height) #(1280, 800)
+        dim = (width, height)  # (1280, 800)
 
         for im in imshow_map:
             # resize image to standardise
@@ -158,7 +156,7 @@ def main():
 
         if len(imshow_map) == 1:
             cv2.imshow(topic_string, im_maps[0])
-        elif len(imshow_map) == 2: # stack vertically
+        elif len(imshow_map) == 2:  # stack vertically
             image_stack_tot = np.vstack((im_maps[0], im_maps[1]))
             cv2.imshow(topic_string, image_stack_tot)
         elif len(imshow_map) <= 4:
@@ -170,16 +168,13 @@ def main():
             image_stack_tot = np.vstack((image_stack_1, image_stack_2))
             cv2.imshow(topic_string, image_stack_tot)
         else:
-            pass # not showing any thing if more than 4 images
+            pass  # not showing any thing if more than 4 images
 
         cv2.waitKey(10)
-
 
     # finalize eCAL API
     ecal_core.finalize()
 
 
-
 if __name__ == "__main__":
     main()
-

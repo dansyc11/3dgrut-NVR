@@ -18,6 +18,7 @@ wall-clock playback pacing is unchanged (the detector keeps up at 15 fps
 wall: v9 recorded all 1266 framesets in 84.6 s). Detections inherit the
 synthetic stamps; frame identity stays header.seq, which is untouched.
 """
+
 import argparse
 import sys
 
@@ -33,13 +34,15 @@ SCHEMA_PATH = "/opt/vilota/messages/image.capnp"
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("output")
-    ap.add_argument("--step-ms", type=float, default=300.0,
-                    help="stampMonotonic spacing per seq (default 300 ms, "
-                         "the v9 timing; must be >= ~250 ms to pass the gate)")
+    ap.add_argument(
+        "--step-ms",
+        type=float,
+        default=300.0,
+        help="stampMonotonic spacing per seq (default 300 ms, " "the v9 timing; must be >= ~250 ms to pass the gate)",
+    )
     args = ap.parse_args()
     step_ns = int(args.step_ms * 1e6)
 
@@ -51,25 +54,29 @@ def main():
         reader = make_reader(fin)
         writer = Writer(fout)
         writer.start(profile="VisualKit", library="retime_for_detector")
-        schema_id = writer.register_schema(name="vkc.Image", encoding="capnp",
-                                           data=schema_bytes)
+        schema_id = writer.register_schema(name="vkc.Image", encoding="capnp", data=schema_bytes)
         channels = {}
         for schema, channel, message in reader.iter_messages():
             if channel.topic not in channels:
                 channels[channel.topic] = writer.register_channel(
-                    topic=channel.topic, message_encoding=channel.message_encoding,
-                    schema_id=schema_id)
+                    topic=channel.topic, message_encoding=channel.message_encoding, schema_id=schema_id
+                )
             with ImageSchema.Image.from_bytes(message.data) as old:
                 b = old.as_builder()
                 b.header.stampMonotonic = int(b.header.seq) * step_ns
                 data = b.to_bytes()
-            writer.add_message(channel_id=channels[channel.topic],
-                               log_time=message.log_time, data=data,
-                               publish_time=message.publish_time)
+            writer.add_message(
+                channel_id=channels[channel.topic],
+                log_time=message.log_time,
+                data=data,
+                publish_time=message.publish_time,
+            )
             n += 1
         writer.finish()
-    print(f"retimed {n} messages ({len(channels)} topics) -> {args.output}, "
-          f"stampMonotonic = seq * {args.step_ms:g} ms, log/publish times kept")
+    print(
+        f"retimed {n} messages ({len(channels)} topics) -> {args.output}, "
+        f"stampMonotonic = seq * {args.step_ms:g} ms, log/publish times kept"
+    )
 
 
 if __name__ == "__main__":

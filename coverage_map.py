@@ -26,7 +26,7 @@ capnp.add_import_hook()
 import tagdetection_capnp as T  # noqa: E402
 from mcap.reader import make_reader  # noqa: E402
 
-RAMP = ".:-=+*#%@"   # index 0 is the lowest non-zero level
+RAMP = ".:-=+*#%@"  # index 0 is the lowest non-zero level
 
 
 def collect(path, wanted, bins):
@@ -50,8 +50,7 @@ def collect(path, wanted, bins):
                     if not (0.0 <= cx < 1.0 and 0.0 <= cy < 1.0):
                         outside[channel.topic] += 1
                         continue
-                    grids[channel.topic][min(bins - 1, int(cy * bins))][
-                        min(bins - 1, int(cx * bins))] += 1
+                    grids[channel.topic][min(bins - 1, int(cy * bins))][min(bins - 1, int(cx * bins))] += 1
     return grids, totals, outside
 
 
@@ -89,10 +88,8 @@ def draw(topic, grid, total, out_of_range, bins):
     }
     print("  quadrants: " + ", ".join(f"{k} {v}" for k, v in q.items()))
 
-    border = [grid[r][c] for r in range(bins) for c in range(bins)
-              if r in (0, bins - 1) or c in (0, bins - 1)]
-    print(f"  outer ring holds {sum(border)} tags "
-          f"({round(100*sum(border)/max(total,1),1)}% of all)")
+    border = [grid[r][c] for r in range(bins) for c in range(bins) if r in (0, bins - 1) or c in (0, bins - 1)]
+    print(f"  outer ring holds {sum(border)} tags " f"({round(100*sum(border)/max(total,1),1)}% of all)")
 
 
 def main():

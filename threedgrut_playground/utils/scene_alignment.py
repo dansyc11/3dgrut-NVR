@@ -42,11 +42,11 @@ class SceneAlignment:
 
     def __init__(self, path, scale, T_scene_to_metric, gravity_up_scene):
         self.path = path
-        self.scale = float(scale)                      # metres per scene unit
-        self.T_scene_to_metric = T_scene_to_metric     # 4x4 Sim(3)
+        self.scale = float(scale)  # metres per scene unit
+        self.T_scene_to_metric = T_scene_to_metric  # 4x4 Sim(3)
         self.T_metric_to_scene = np.linalg.inv(T_scene_to_metric)
         self.R_scene_to_metric = T_scene_to_metric[:3, :3] / self.scale
-        self.gravity_up_scene = gravity_up_scene       # unit, scene axes
+        self.gravity_up_scene = gravity_up_scene  # unit, scene axes
         self.gravity_down_scene = -gravity_up_scene
 
     # ---- design frame (scene axes, metric units) <-> scene units --------
@@ -74,8 +74,7 @@ class SceneAlignment:
 
     def meta_dict(self):
         """Provenance stamp for npz metadata."""
-        return {"path": self.path, "scale_m_per_unit": self.scale,
-                "gravity_up_scene": self.gravity_up_scene.tolist()}
+        return {"path": self.path, "scale_m_per_unit": self.scale, "gravity_up_scene": self.gravity_up_scene.tolist()}
 
 
 def load(path):
@@ -94,21 +93,18 @@ def load(path):
     if not (np.isfinite(s) and s > 0):
         raise ValueError(f"{path}: scale {s} not a positive number")
     if abs(s - s_final) > 1e-3 * s:
-        raise ValueError(f"{path}: sim3.scale {s} disagrees with "
-                         f"scale.final_m_per_unit {s_final}")
+        raise ValueError(f"{path}: sim3.scale {s} disagrees with " f"scale.final_m_per_unit {s_final}")
     if M.shape != (4, 4) or not np.allclose(M[3], [0, 0, 0, 1], atol=1e-9):
-        raise ValueError(f"{path}: sim3 matrix is not a 4x4 with [0,0,0,1] "
-                         f"bottom row (shape {M.shape})")
+        raise ValueError(f"{path}: sim3 matrix is not a 4x4 with [0,0,0,1] " f"bottom row (shape {M.shape})")
     R = M[:3, :3] / s
     if not np.allclose(R @ R.T, np.eye(3), atol=1e-5):
-        raise ValueError(f"{path}: M[:3,:3]/scale is not orthogonal "
-                         f"(max dev {np.abs(R @ R.T - np.eye(3)).max():.2e})")
+        raise ValueError(
+            f"{path}: M[:3,:3]/scale is not orthogonal " f"(max dev {np.abs(R @ R.T - np.eye(3)).max():.2e})"
+        )
     if abs(np.linalg.det(R) - 1.0) > 1e-5:
-        raise ValueError(f"{path}: M[:3,:3]/scale has det "
-                         f"{np.linalg.det(R):.6f}, want +1 (proper rotation)")
+        raise ValueError(f"{path}: M[:3,:3]/scale has det " f"{np.linalg.det(R):.6f}, want +1 (proper rotation)")
     if up.shape != (3,) or abs(np.linalg.norm(up) - 1.0) > 1e-3:
-        raise ValueError(f"{path}: gravity_up_in_splat_coords norm "
-                         f"{np.linalg.norm(up):.6f}, want a unit vector")
+        raise ValueError(f"{path}: gravity_up_in_splat_coords norm " f"{np.linalg.norm(up):.6f}, want a unit vector")
     up = up / np.linalg.norm(up)
     up_metric = R @ up
     tilt = np.arccos(np.clip(up_metric[2], -1.0, 1.0))
@@ -116,17 +112,17 @@ def load(path):
         raise ValueError(
             f"{path}: gravity-up rotated into the metric frame is "
             f"{np.degrees(tilt):.2f} deg from +z (maps to {up_metric}); "
-            f"the sim3 and gravity fields disagree on the up direction")
+            f"the sim3 and gravity fields disagree on the up direction"
+        )
     return SceneAlignment(path, s, M, up)
 
 
 if __name__ == "__main__":
     import sys
+
     a = load(sys.argv[1])
     print(f"{a.path}")
-    print(f"  scale            {a.scale:.6f} m/unit "
-          f"(1 m = {1.0 / a.scale:.6f} units)")
+    print(f"  scale            {a.scale:.6f} m/unit " f"(1 m = {1.0 / a.scale:.6f} units)")
     print(f"  gravity up scene {np.array2string(a.gravity_up_scene, precision=5)}")
     print(f"  gravity_w(9.81)  {np.array2string(a.gravity_w(), precision=4)}")
-    print(f"  up in metric     "
-          f"{np.array2string(a.R_scene_to_metric @ a.gravity_up_scene, precision=5)}")
+    print(f"  up in metric     " f"{np.array2string(a.R_scene_to_metric @ a.gravity_up_scene, precision=5)}")
