@@ -336,7 +336,15 @@ python train.py --config-name apps/colmap_3dgut.yaml path=<colmap dataset> out_d
     experiment_name=<name> dataset.downsample_factor=4 export_ply.enabled=true
 ```
 
-* **Masks.** Put `<image stem>_mask.png` next to each image (single channel, 255 = valid). They zero the loss outside the lens's image circle, and validation PSNR counts valid pixels only.
+* **Image folder layout.** The loader opens `images_<N>/<name>` with the name exactly as `images.bin` stores it, subfolders included; the meeting room and the main campus store `cam1/IMG_…_fisheye1.png` and `cam2/IMG_…_fisheye2.png`. A flat `images_4/` gives `Image … not found` for every frame. Both datasets keep their flat files and add `cam1/` and `cam2/` folders of relative symlinks to them, masks included, so older checkouts, which look up the basename, load them too. For another dataset, mirror `images.bin`'s subfolders the same way; for these two cameras:
+
+  ```bash
+  cd <dataset>/images_4 && mkdir cam1 cam2
+  for f in *fisheye1*; do ln -s "../$f" "cam1/$f"; done
+  for f in *fisheye2*; do ln -s "../$f" "cam2/$f"; done
+  ```
+
+* **Masks.** Put `<image stem>_mask.png` next to each image, in the same subfolder (single channel, 255 = valid). They zero the loss outside the lens's image circle, and validation PSNR counts valid pixels only.
 * **Fisheye cull cone.** `FISHEYE_MAX_ANGLE_DEG=105` clamps the fisheye max angle for lenses whose frame corners lie outside the image circle.
 * **Lower-degree SH.** PLY files with SH degree below 3 load (zero-padded). Start the camera at a pose for large scenes: `--initial_pose EX EY EZ TX TY TZ UX UY UZ`.
 * **Diagnostics.** `tools/fiord_gaussian_census.py <export.ply> <images.bin>` (CPU) and `tools/render_pose_diff.py --run_dir <run>` (GPU).
