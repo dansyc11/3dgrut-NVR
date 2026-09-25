@@ -412,7 +412,7 @@ The five checks this port was validated with, against the fork (`refactor-v-devi
 | 1. Default launch, `room.ply` | Compiles and renders after the Vilota patch above. Semi-transparent Gaussians blend differently from the fork: upstream's playground path tracer (#89) composites them differently; opaque surfaces match. |
 | 2. Three-board calibration render | 1,295 frames per camera, 1,265 detection frames per camera, `dataset_check` 4/4, reprojection floor 0.40–0.42 px. Solve: focal −0.066 / −0.077 / −0.080 / +0.028 %, rotation 0.051 / 0.021 / 0.032°, position 0.44 / 0.13 / 0.13 mm, fitted reprojection 0.48–0.52 px; within 0.003 pp, 0.003° and 0.031 mm of the fork's reference solve. |
 | 3. VIO render, meeting room | Three replays: 9.6 / 11.4 / 14.7 mm aligned position RMS, median 11.4 mm (reference 11.0 mm, spread 8.2–16.7). |
-| 4. Small City, SH degree 1 | Not run yet. |
+| 4. Small City, SH degree 1 | Not run. Instead the fork-trained main-campus model from September (`runs/campus_grt/main_campus-1409_154545` in the fork) loaded and rendered fine in the port's playground; it is SH degree 3, so the degree-1 loading path this check targets is still untested. |
 | 5. 3DGRT retrain, meeting room | With `FISHEYE_MAX_ANGLE_DEG=105`: masked PSNR 25.42 dB against the fork's 24.56 (+0.86), full frame +0.20; camera 1 +0.57 dB, camera 2 +1.20 dB, growing towards the image rim. Without the clamp: 20.66 dB, all of the loss on camera 2's folded outer third. The fork's older loader looks up intrinsics and masks by split position, so it renders every camera-2 test frame with camera 1's lens model; the port loads them per frame. |
 
 ---
