@@ -83,6 +83,11 @@ class ColmapDataset(Dataset, BoundedMultiViewDataset, DatasetVisualization):
         self.image_paths = self.image_paths[
             indices
         ]  # image_paths is a numpy str array of image paths
+        # __getitem__ reads the camera id and the mask by split position too: filter them
+        # the same way, or each frame gets those of the image at its pre-split position
+        keep = np.arange(self.n_frames)[indices]
+        self.cam_extrinsics = [self.cam_extrinsics[i] for i in keep]
+        self.mask_paths = self.mask_paths[indices]
 
         self.camera_centers = self.camera_centers[indices]
         self.center, self.length_scale, self.scene_bbox = self.compute_spatial_extents()
