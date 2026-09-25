@@ -349,6 +349,12 @@ python train.py --config-name apps/colmap_3dgut.yaml path=<colmap dataset> out_d
 * **Lower-degree SH.** PLY files with SH degree below 3 load (zero-padded). Start the camera at a pose for large scenes: `--initial_pose EX EY EZ TX TY TZ UX UY UZ`.
 * **Diagnostics.** `tools/fiord_gaussian_census.py <export.ply> <images.bin>` (CPU) and `tools/render_pose_diff.py --run_dir <run>` (GPU).
 
+> ⚠️ **Known issue: a 12,000-step schedule in a 30,000-step run.** `configs/base_gs.yaml` ends the positions learning-rate schedule (`scheduler.positions.max_steps: 12000`) and the checkpoints (`checkpoint.iterations: [7000, 10000, 12000]`) at 12,000 steps, while training runs `n_iterations: 30000`. The positions learning rate sits at its final value for the last 18,000 steps, and the last scheduled checkpoint is at 12,000 (`ckpt_last.pt` is still written when training ends). The configs are left as they are; to train with upstream's values, add these two overrides:
+>
+> ```bash
+> scheduler.positions.max_steps=30000 'checkpoint.iterations=[7000,30000]'
+> ```
+
 ---
 
 # Troubleshooting
