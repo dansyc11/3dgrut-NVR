@@ -416,7 +416,11 @@ class ColmapDataset(Dataset, BoundedMultiViewDataset, DatasetVisualization):
             # The corner radius over-budgets max_angle past the lens image
             # circle (e.g. FIORD 200-deg fisheyes: corner ~134 deg vs 100 deg
             # half-FOV), widening the 3dgut cull cone (cameraProjections.cuh:
-            # 119,127). Optional clamp; unset leaves all datasets untouched.
+            # 119,127). max_angle also seeds the ray inversion below: past the
+            # peak of the distortion curve it lands on the far branch, and a
+            # third of one FIORD lens's valid pixels get rays 115-180 deg off
+            # axis. Set FISHEYE_MAX_ANGLE_DEG=105 for the meeting room and the
+            # main campus (train and render); unset leaves max_angle unchanged.
             if (clamp_deg := os.environ.get("FISHEYE_MAX_ANGLE_DEG")) is not None:
                 max_angle = min(max_angle, np.radians(float(clamp_deg)))
 
