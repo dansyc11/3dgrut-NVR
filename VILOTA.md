@@ -158,16 +158,17 @@ Expect every `ok` line.
 
 ## Tests
 
-All four run on the CPU in either environment:
+All five run on the CPU in either environment:
 
 ```bash
 python tests/test_estimate_theta_star.py   # KB4 inverse: fails if the round trip exceeds 1e-5 rad / 0.01 px
 python tests/test_board_layout.py          # board materials and layouts
 python tests/test_orbit_framing.py         # orbit framing against the device fields of view
 python tests/test_vio_trajectory.py        # VIO path smoothness, stamps, projection
+python tests/test_rotation_convention.py   # reproject_far's board rotation == the engine's
 ```
 
-Expect exit 0 from each, and `5 checks passed`, `3 checks passed` and `all vio trajectory checks passed` from the last three.
+Expect exit 0 from each, and `5 checks passed`, `3 checks passed`, `all vio trajectory checks passed` and `4 checks passed` from the last four. The rotation test guards an upstream quirk: 3dgrut 6f8489d made `utils/transform.py` right-handed, but the engine imports `utils/kaolin_future/transform.py`, which kept the original signs. If upstream ever changes the engine's rotations, this test fails before any tilted board renders mirrored.
 
 ---
 
