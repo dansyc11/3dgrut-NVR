@@ -210,7 +210,7 @@ Verify:
 mcap info mcap_outputs/long_final_path.mcap
 ```
 
-Expect `S1/cama..camd`, 1295 msgs each at 30 Hz. Rename it and copy `video_trajectories/test_1.csv` (the poses, for the reprojection check) before the next build.
+Expect `S1/cama..camd`, 1295 msgs each at 30 Hz. Rename it and copy `video_trajectories/video_trajectory.csv` (the poses, for the reprojection check) before the next build.
 
 ## Scene files
 
@@ -393,7 +393,7 @@ Put the device file in `calibration_files/`, load it in the GUI and pass it to e
 
 # Notes
 
-* Rename every render output immediately. The next render overwrites `mcap_outputs/long_final_path.mcap`, and the next build overwrites `mcap_outputs/vio_truth.npz` and `video_trajectories/test_1.csv`.
+* Rename every render output immediately. The next render overwrites `mcap_outputs/long_final_path.mcap`, and the next build overwrites `mcap_outputs/vio_truth.npz` and `video_trajectories/video_trajectory.csv`.
 * Image MCAPs are big (1–4 GB) and regenerable. The tags MCAP, the trajectory CSV and the truth npz carry the evidence.
 * One calibration file per run, everywhere.
 
