@@ -67,6 +67,8 @@ ls /opt/vilota/messages/image.capnp /opt/vilota/messages/tagdetection.capnp
 
 Expect both files.
 
+> After every vk-system update, rebuild vk_calibrate as in the full pipeline guide (step 5). The solver links vk-system's `libvk_sdk.so` by exact version, and the update removes the old library, so the old solver fails to start with `error while loading shared libraries: libvk_sdk.so.…`.
+
 ### 3. This repo and its Python environment
 
 #### GPU environment: render and train
